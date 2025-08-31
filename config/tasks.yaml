@@ -1,0 +1,351 @@
+# CrowdWisdomTrading AI Agent - Tasks Configuration
+# Professional Financial Analysis Task Definitions
+
+# Core Assessment Tasks
+search_financial_news:
+  description: >
+    Search for the most recent and relevant US financial news from the last hour.
+    Focus on major stock movements, earnings announcements, economic data releases,
+    Federal Reserve updates, corporate announcements, and market-moving events.
+    Use both Tavily and Serper tools for comprehensive coverage from reliable sources
+    like Bloomberg, Reuters, CNBC, and MarketWatch.
+  expected_output: >
+    A comprehensive list of 5-10 recent US financial news items with source, timestamp,
+    summary, affected stocks/sectors, and potential trading impact. Include specific
+    stock symbols, percentage changes, and dollar amounts.
+  agent: search_agent
+  tools:
+    - tavily_financial_search
+    - serper_financial_search
+  context: []
+  output_format: "structured_text"
+  max_execution_time: 180
+  retry_attempts: 2
+
+create_summary:
+  description: >
+    Create a concise daily financial market summary under 500 words based on search results.
+    Structure: Market Overview, Key Movers, Sector Analysis, Economic Highlights, Tomorrow's Watch List.
+    Use professional analytical tone with specific numbers, stock symbols in CAPS, and actionable insights.
+  expected_output: >
+    A professional financial market summary under 500 words with clear market overview,
+    specific stock movements with percentages, sector performance analysis, economic developments,
+    and forward-looking insights formatted with sections and bullet points.
+  agent: summary_agent
+  tools: []
+  context: 
+    - search_financial_news
+  output_format: "markdown"
+  max_execution_time: 120
+  word_limit: 500
+  quality_checks:
+    - word_count_validation
+    - financial_terminology_check
+    - professional_tone_validation
+
+format_with_images:
+  description: >
+    Format the financial summary by finding and integrating 2 relevant financial charts/graphs.
+    Find stock charts for mentioned companies and market index charts. Use markdown image syntax
+    with descriptive captions. Ensure images enhance understanding and maintain professional presentation.
+  expected_output: >
+    Well-formatted financial summary with 1-2 relevant financial charts integrated,
+    proper markdown formatting, descriptive captions, and maintained professional presentation
+    with working image URLs from reliable sources.
+  agent: formatting_agent
+  tools:
+    - financial_image_finder
+  context:
+    - create_summary
+  output_format: "markdown"
+  max_execution_time: 150
+  image_requirements:
+    max_images: 2
+    required_types:
+      - stock_chart
+      - market_index
+    fallback_enabled: true
+
+translate_to_arabic:
+  description: >
+    Translate the formatted financial summary to Arabic while maintaining financial accuracy,
+    preserving stock symbols and numerical data, and using appropriate financial terminology.
+    Ensure professional quality suitable for Arabic-speaking financial professionals.
+  expected_output: >
+    Professional Arabic translation of the financial summary with preserved stock symbols,
+    maintained formatting, accurate financial terminology, and natural flow in Arabic
+    suitable for financial professionals.
+  agent: translation_agent
+  tools:
+    - financial_translator
+  context:
+    - format_with_images
+  output_format: "markdown"
+  max_execution_time: 100
+  language_config:
+    target_language: "arabic"
+    preserve_formatting: true
+    financial_terminology_mode: true
+    rtl_support: true
+
+translate_to_hindi:
+  description: >
+    Translate the formatted financial summary to Hindi while maintaining financial accuracy,
+    preserving stock symbols and numerical data, and using appropriate financial terminology.
+    Ensure professional quality suitable for Hindi-speaking financial professionals.
+  expected_output: >
+    Professional Hindi translation of the financial summary with preserved stock symbols,
+    maintained formatting, accurate financial terminology, and natural flow in Hindi
+    suitable for financial professionals.
+  agent: translation_agent
+  tools:
+    - financial_translator
+  context:
+    - format_with_images
+  output_format: "markdown"
+  max_execution_time: 100
+  language_config:
+    target_language: "hindi"
+    preserve_formatting: true
+    financial_terminology_mode: true
+    script: "devanagari"
+
+translate_to_hebrew:
+  description: >
+    Translate the formatted financial summary to Hebrew while maintaining financial accuracy,
+    preserving stock symbols and numerical data, and using appropriate financial terminology.
+    Ensure professional quality suitable for Hebrew-speaking financial professionals.
+  expected_output: >
+    Professional Hebrew translation of the financial summary with preserved stock symbols,
+    maintained formatting, accurate financial terminology, and natural flow in Hebrew
+    suitable for financial professionals.
+  agent: translation_agent
+  tools:
+    - financial_translator
+  context:
+    - format_with_images
+  output_format: "markdown"
+  max_execution_time: 100
+  language_config:
+    target_language: "hebrew"
+    preserve_formatting: true
+    financial_terminology_mode: true
+    rtl_support: true
+
+send_to_telegram:
+  description: >
+    Send the financial summaries to Telegram channel in all languages (English, Arabic, Hindi, Hebrew).
+    Use proper formatting for mobile reading, include timestamps and branding, ensure successful delivery
+    of all language versions with appropriate emojis and professional presentation.
+  expected_output: >
+    Successful delivery confirmation for all 4 language versions with proper formatting,
+    timestamps, professional branding, and confirmation of delivery to the correct channel.
+  agent: send_agent
+  tools:
+    - telegram_sender
+  context:
+    - format_with_images
+    - translate_to_arabic
+    - translate_to_hindi
+    - translate_to_hebrew
+  output_format: "delivery_confirmation"
+  max_execution_time: 120
+  delivery_config:
+    message_delay: 2  
+    retry_attempts: 3
+    include_branding: true
+    include_timestamp: true
+
+# Advanced Analysis Tasks (Extra Credit Features)
+comprehensive_market_analysis:
+  description: >
+    Perform deep market analysis including sentiment analysis, technical indicators,
+    fundamental metrics, sector rotation patterns, risk assessment, and forward-looking insights.
+    Provide institutional-quality analysis for sophisticated market participants.
+  expected_output: >
+    Comprehensive market analysis report with sentiment assessment, technical analysis,
+    fundamental insights, sector analysis, risk matrix, and forward-looking outlook
+    with probability scenarios and investment implications.
+  agent: analysis_agent
+  tools: []
+  context:
+    - create_summary
+  output_format: "analytical_report"
+  max_execution_time: 200
+  analysis_depth: "institutional"
+
+create_trading_alerts:
+  description: >
+    Generate 3-5 specific trading alerts with entry/exit criteria, risk management parameters,
+    and catalyst timelines. Include technical breakouts, earnings plays, economic data opportunities,
+    and sector rotation trades with detailed risk/reward analysis.
+  expected_output: >
+    Set of actionable trading alerts with specific entry criteria, price targets,
+    stop losses, position sizing, risk/reward ratios, catalyst timelines, and
+    confidence levels for each recommended trade.
+  agent: trading_specialist
+  tools: []
+  context:
+    - create_summary
+    - comprehensive_market_analysis
+  output_format: "trading_alerts"
+  max_execution_time: 150
+  alert_requirements:
+    min_alerts: 3
+    max_alerts: 5
+    risk_reward_min: 1.5
+    confidence_threshold: 70
+
+monitor_market_anomalies:
+  description: >
+    Detect and analyze unusual market activity including volume anomalies, price gaps,
+    sector rotations, correlation breakdowns, and cross-asset anomalies. Assess severity
+    and provide historical context with recommended monitoring actions.
+  expected_output: >
+    Market anomaly detection report with identified anomalies, severity ratings,
+    historical context, probability assessments, recommended monitoring strategies,
+    and risk assessment for portfolio impact.
+  agent: risk_monitoring_agent
+  tools: []
+  context:
+    - search_financial_news
+    - create_summary
+  output_format: "risk_report"
+  max_execution_time: 180
+  anomaly_thresholds:
+    volume_spike: 200  # % above average
+    price_gap: 3       # % gap threshold
+    volatility_spike: 50  # % above normal
+
+# Task Execution Sequences
+task_sequences:
+  basic_sequence:
+    name: "Daily Market Summary"
+    description: "Core daily financial summary generation and delivery"
+    tasks:
+      - search_financial_news
+      - create_summary
+      - format_with_images
+      - translate_to_arabic
+      - translate_to_hindi
+      - translate_to_hebrew
+      - send_to_telegram
+    execution_type: "sequential"
+    estimated_time: 600  # seconds
+    
+  advanced_sequence:
+    name: "Comprehensive Market Analysis"
+    description: "Extended analysis with trading alerts and risk assessment"
+    tasks:
+      - search_financial_news
+      - create_summary
+      - comprehensive_market_analysis
+      - create_trading_alerts
+      - monitor_market_anomalies
+      - format_with_images
+      - translate_to_arabic
+      - translate_to_hindi
+      - translate_to_hebrew
+      - send_to_telegram
+    execution_type: "mixed"  # Sequential core, parallel translations
+    estimated_time: 900  # seconds
+  
+  parallel_translations:
+    name: "Parallel Translation Processing"
+    description: "Simultaneous translation to all target languages"
+    tasks:
+      - translate_to_arabic
+      - translate_to_hindi
+      - translate_to_hebrew
+    execution_type: "parallel"
+    estimated_time: 100  # seconds
+
+# Quality Control and Validation
+quality_control:
+  summary_validation:
+    max_words: 500
+    min_words: 200
+    required_sections:
+      - "Market Overview"
+      - "Key Movers" 
+      - "Sector Analysis"
+    required_elements:
+      - stock_symbols
+      - percentage_changes
+      - specific_numbers
+  
+  translation_validation:
+    preserve_elements:
+      - stock_symbols
+      - numerical_data
+      - markdown_formatting
+      - currency_symbols
+    quality_thresholds:
+      length_ratio_min: 0.7
+      length_ratio_max: 1.5
+      terminology_accuracy: 0.95
+  
+  delivery_validation:
+    required_deliveries: 4  # English + 3 translations
+    max_message_length: 4000  # Telegram limit
+    required_formatting: "markdown"
+    include_elements:
+      - timestamp
+      - branding
+      - language_identifier
+
+# Error Handling and Fallbacks
+error_handling:
+  search_fallbacks:
+    - use_alternative_search_tool
+    - extend_time_range
+    - use_cached_financial_data
+  
+  translation_fallbacks:
+    - use_alternative_translation_service
+    - provide_english_with_note
+    - use_simplified_terminology
+  
+  delivery_fallbacks:
+    - save_to_local_file
+    - send_to_alternative_channel
+    - email_notification
+  
+  retry_config:
+    max_retries: 3
+    backoff_strategy: "exponential"
+    initial_delay: 2
+    max_delay: 30
+
+# Performance Monitoring
+performance_tracking:
+  enable_timing: true
+  enable_memory_tracking: true
+  enable_api_monitoring: true
+  log_level: "INFO"
+  
+  metrics_to_track:
+    - execution_time_per_task
+    - api_response_times
+    - success_failure_rates
+    - content_quality_scores
+    - delivery_confirmation_rates
+  
+  alert_thresholds:
+    max_execution_time: 600  # seconds
+    min_success_rate: 0.8
+    max_error_rate: 0.2
+
+# Development and Testing Configuration
+development:
+  test_mode:
+    enable: false
+    use_sample_data: false
+    skip_api_calls: false
+    mock_responses: false
+  
+  debug_mode:
+    verbose_logging: true
+    save_intermediate_results: true
+    detailed_error_messages: true
+    performance_profiling: true

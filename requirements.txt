@@ -1,0 +1,71 @@
+# CrowdWisdomTrading AI Agent Requirements
+# Financial Market Summary Generator
+
+# Core CrewAI Framework
+crewai[tools]>=0.28.0
+crewai-tools>=0.1.6
+
+# LLM Integration
+litellm>=1.35.0
+openai>=1.10.0
+
+# Search Tools
+tavily-python>=0.3.0
+google-search-results>=2.4.2
+
+# Telegram Integration
+python-telegram-bot>=20.7
+requests>=2.31.0
+
+# Translation Support
+googletrans>=4.0.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Configuration and Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0
+pydantic>=2.5.0
+
+# Image Processing
+Pillow>=10.0.0
+urllib3>=2.0.0
+
+# Time and Scheduling
+pytz>=2023.3
+python-dateutil>=2.8.2
+
+# Enhanced Error Handling and Logging
+colorlog>=6.7.0
+structlog>=23.1.0
+
+# Development and Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.1
+black>=23.7.0
+flake8>=6.0.0
+
+# Performance Monitoring
+psutil>=5.9.0
+memory-profiler>=0.61.0
+
+# Optional: Additional AI Models
+groq>=0.4.0
+
+# Async Support
+asyncio
+aiohttp>=3.9.0
+
+# Web Scraping (Backup)
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# JSON/YAML Processing
+jsonschema>=4.17.0
+
+# CLI Enhancement
+click>=8.1.0
+rich>=13.5.0
+tqdm>=4.65.0

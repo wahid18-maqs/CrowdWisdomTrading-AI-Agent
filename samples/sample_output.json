@@ -1,0 +1,13 @@
+{
+  "timestamp": "2024-01-15T18:30:00Z",
+  "market_status": "closed",
+  "english_summary": "Sample financial market summary...",
+  "translations": {
+    "arabic": "ملخص السوق المالي...",
+    "hindi": "वित्तीय बाजार सारांश...",
+    "hebrew": "סיכום שוק כספי..."
+  },
+  "images_found": 2,
+  "telegram_delivery": "success",
+  "execution_time_seconds": 120
+}
