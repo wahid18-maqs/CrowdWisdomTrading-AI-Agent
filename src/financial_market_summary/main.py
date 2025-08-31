@@ -46,7 +46,7 @@ def setup_environment():
     config_manager = ConfigManager()
     
     # Validate required API keys
-    required_keys = ['openai', 'tavily', 'telegram_bot_token', 'telegram_chat_id']
+    required_keys = ['groq', 'tavily', 'telegram_bot_token', 'telegram_chat_id'] # Changed from 'openai' to 'groq'
     key_validation = config_manager.validate_required_keys(required_keys)
     
     missing_keys = [k for k, v in key_validation.items() if not v]
@@ -54,7 +54,7 @@ def setup_environment():
         logger.error(f"❌ Missing required API keys: {missing_keys}")
         print(f"\n❌ ERROR: Missing required environment variables:")
         for key in missing_keys:
-            print(f"   - {key.upper()}_API_KEY" if not key.startswith('telegram') else f"   - {key.upper()}")
+            print(f"  - {key.upper()}_API_KEY" if not key.startswith('telegram') else f"  - {key.upper()}")
         print(f"\nPlease set these in your .env file or environment variables.")
         return False, None, None
     

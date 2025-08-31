@@ -6,6 +6,7 @@ from .tools.tavily_search import TavilyFinancialTool, SerperFinancialTool
 from .tools.telegram_sender import TelegramSender
 from .tools.image_finder import ImageFinder
 from .tools.translator import MultiLanguageTranslator
+from langchain_groq import ChatGroq
 
 class FinancialAgents:
     """Factory class for creating specialized financial AI agents"""
@@ -17,7 +18,14 @@ class FinancialAgents:
         self.telegram_sender = TelegramSender()
         self.image_finder = ImageFinder()
         self.translator = MultiLanguageTranslator()
-    
+        
+        # Initialize the Groq LLM client
+        self.groq_llm = ChatGroq(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model_name="groq/meta-llama/llama-4-scout-17b-16e-instruct",
+            temperature=0.3
+        )
+
     def search_agent(self):
         """Agent specialized in searching financial news"""
         return Agent(
@@ -34,10 +42,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=3,
-            llm_config={
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.3
-            }
+            llm=self.groq_llm
         )
     
     def summary_agent(self):
@@ -58,10 +63,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm_config={
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.4
-            }
+            llm=self.groq_llm
         )
     
     def formatting_agent(self):
@@ -82,10 +84,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm_config={
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.3
-            }
+            llm=self.groq_llm
         )
     
     def translation_agent(self):
@@ -107,10 +106,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm_config={
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.2  
-            }
+            llm=self.groq_llm
         )
     
     def send_agent(self):
@@ -132,10 +128,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm_config={
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.3
-            }
+            llm=self.groq_llm
         )
     
     def create_crew_agents(self):
@@ -174,17 +167,13 @@ class FinancialAgents:
             "verbose": True,
             "memory": True,
             "allow_delegation": False,
-            "llm_config": {
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.3,
-                "max_tokens": 2000
-            }
+            "llm": self.groq_llm
         }
         
         # Merge configurations
         config = {**default_config, **custom_config}
         
-       
+        
         agents = self.create_crew_agents()
         for agent in agents:
             for key, value in config.items():
