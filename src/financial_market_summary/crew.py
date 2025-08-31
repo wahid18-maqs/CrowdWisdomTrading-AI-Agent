@@ -27,7 +27,7 @@ class FinancialMarketFlow(Flow):
     def __init__(self):
         super().__init__()
         self.agents = FinancialAgents()
-        self.tasks = FinancialTasks()
+        self.tasks = FinancialTasks(self.agents)  # Pass agents to FinancialTasks
         
         # Initialize tools
         self.tavily_tool = TavilyFinancialTool()
@@ -47,11 +47,16 @@ class FinancialMarketFlow(Flow):
     @start()
     def start_flow(self):
         """Start the financial summary flow"""
-        logger.info("Starting Financial Market Summary Flow")
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"Flow initiated at: {current_time}")
-        
-        return {"status": "flow_started", "timestamp": current_time}
+        try:
+            logger.info("Starting Financial Market Summary Flow")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"Flow initiated at: {current_time}")
+            self.flow_state['start_time'] = current_time
+            return {"status": "flow_started", "timestamp": current_time}
+        except Exception as e:
+            logger.error(f"Error in start_flow: {str(e)}")
+            self.flow_state['start_time'] = None
+            return {"status": "start_failed", "error": str(e)}
     
     @listen(start_flow)
     def search_financial_news(self, context: Dict[str, Any]):
@@ -73,12 +78,11 @@ class FinancialMarketFlow(Flow):
             
             result = crew.kickoff()
             self.flow_state['raw_news_data'] = result
-            
             logger.info(f"Search completed. Found {len(str(result))} characters of news data")
             return {"status": "search_completed", "data": result}
-            
         except Exception as e:
             logger.error(f"Error in search step: {str(e)}")
+            self.flow_state['raw_news_data'] = None
             return {"status": "search_failed", "error": str(e)}
     
     @listen(search_financial_news)
@@ -89,7 +93,8 @@ class FinancialMarketFlow(Flow):
             
             # Guardrail: Check if we have valid data
             if not self.flow_state['raw_news_data'] or len(str(self.flow_state['raw_news_data'])) < 100:
-                logger.warning("Insufficient data for summary generation")
+                logger.error("Insufficient data for summary generation")
+                self.flow_state['summary'] = None
                 return {"status": "summary_failed", "error": "Insufficient search data"}
             
             summary_agent = self.agents.summary_agent()
@@ -106,17 +111,17 @@ class FinancialMarketFlow(Flow):
             result = crew.kickoff()
             
             # Guardrail: Check summary length
-            if len(result.split()) > 500:
+            if len(str(result).split()) > 500:
                 logger.warning("Summary exceeds 500 words, trimming...")
-                words = result.split()[:500]
+                words = str(result).split()[:500]
                 result = ' '.join(words) + "..."
             
             self.flow_state['summary'] = result
             logger.info("Summary created successfully")
             return {"status": "summary_completed", "summary": result}
-            
         except Exception as e:
             logger.error(f"Error in summary step: {str(e)}")
+            self.flow_state['summary'] = None
             return {"status": "summary_failed", "error": str(e)}
     
     @listen(create_summary)
@@ -127,6 +132,8 @@ class FinancialMarketFlow(Flow):
             
             # Guardrail: Check if summary exists
             if not self.flow_state['summary']:
+                logger.error("No summary available for formatting")
+                self.flow_state['formatted_summary'] = None
                 return {"status": "formatting_failed", "error": "No summary to format"}
             
             formatting_agent = self.agents.formatting_agent()
@@ -142,10 +149,8 @@ class FinancialMarketFlow(Flow):
             
             result = crew.kickoff()
             self.flow_state['formatted_summary'] = result
-            
             logger.info("Formatting completed")
             return {"status": "formatting_completed", "formatted": result}
-            
         except Exception as e:
             logger.error(f"Error in formatting step: {str(e)}")
             # Fallback: use original summary
@@ -157,6 +162,12 @@ class FinancialMarketFlow(Flow):
         """Translate summary to multiple languages"""
         try:
             logger.info("Step 4: Translating summary...")
+            
+            # Guardrail: Check if formatted summary exists
+            if not self.flow_state['formatted_summary'] or len(str(self.flow_state['formatted_summary'])) < 50:
+                logger.error("No valid formatted summary available for translation")
+                self.flow_state['translations'] = {}
+                return {"status": "translation_failed", "error": "No valid summary to translate"}
             
             target_languages = ['arabic', 'hindi', 'hebrew']
             translations = {}
@@ -175,18 +186,17 @@ class FinancialMarketFlow(Flow):
                     )
                     
                     result = crew.kickoff()
-                    translations[language] = result
+                    translations[language] = result.output if hasattr(result, 'output') else str(result)
                     logger.info(f"Translation to {language} completed")
-                    
                 except Exception as e:
                     logger.error(f"Failed to translate to {language}: {str(e)}")
                     translations[language] = f"Translation failed: {str(e)}"
             
             self.flow_state['translations'] = translations
             return {"status": "translation_completed", "translations": translations}
-            
         except Exception as e:
             logger.error(f"Error in translation step: {str(e)}")
+            self.flow_state['translations'] = {}
             return {"status": "translation_failed", "error": str(e)}
     
     @listen(translate_summary)
@@ -197,14 +207,17 @@ class FinancialMarketFlow(Flow):
             
             # Prepare content for all languages
             all_content = {
-                'english': self.flow_state['formatted_summary'],
-                **self.flow_state['translations']
+                'english': str(self.flow_state.get('formatted_summary', '')),
+                **self.flow_state.get('translations', {})
             }
+            
+            # Guardrail: Check if English summary exists
+            if not all_content['english'] or len(all_content['english']) < 50:
+                logger.error("No valid English summary to send")
+                return {"status": "send_failed", "error": "No valid English summary"}
             
             send_agent = self.agents.send_agent()
             send_task = self.tasks.send_to_telegram()
-            
-            # Pass content as context
             send_task.context = [all_content]
             
             crew = Crew(
@@ -215,10 +228,8 @@ class FinancialMarketFlow(Flow):
             )
             
             result = crew.kickoff()
-            
             logger.info("Successfully sent to Telegram")
-            return {"status": "send_completed", "result": result}
-            
+            return {"status": "send_completed", "result": result.output if hasattr(result, 'output') else str(result)}
         except Exception as e:
             logger.error(f"Error in send step: {str(e)}")
             return {"status": "send_failed", "error": str(e)}
@@ -231,21 +242,29 @@ class FinancialMarketFlow(Flow):
             # Run the flow
             result = self.kickoff()
             
-            logger.info("=== Flow completed successfully ===")
-            return {
-                "status": "success",
-                "flow_state": self.flow_state,
-                "final_result": result
-            }
+            # Check for failed steps
+            error_count = sum(1 for step in ['search_financial_news', 'create_summary', 'format_with_images', 'translate_summary', 'send_to_telegram']
+                             if self.flow_state.get(step, {}).get('status', '').startswith('failed'))
+            success_rate = (5 - error_count) / 5 * 100 if error_count <= 5 else 0
+            status = "success" if error_count == 0 else "partial_success" if error_count < 5 else "failed"
             
+            logger.info(f"=== Flow completed with status: {status} ===")
+            return {
+                "status": status,
+                "flow_state": self.flow_state,
+                "final_result": result,
+                "error_count": error_count,
+                "success_rate": success_rate
+            }
         except Exception as e:
             logger.error(f"Flow failed with error: {str(e)}")
             return {
                 "status": "failed",
                 "error": str(e),
-                "partial_state": self.flow_state
+                "partial_state": self.flow_state,
+                "error_count": 1,
+                "success_rate": 0
             }
-
 
 def run_financial_flow():
     """Main function to run the financial flow"""
