@@ -320,12 +320,5 @@ def main():
         save_output=not args.no_save
     )
     
-    if success:
-        print("\n🎉 Financial Market Summary completed successfully!")
-        print("📧 Ready for submission to: gilad@crowdwisdomtrading.com")
-    else:
-        print("\n❌ Financial Market Summary failed. Check logs for details.")
-        sys.exit(1)
-
 if __name__ == "__main__":
     main()
