@@ -210,26 +210,17 @@ class FinancialMarketFlow(Flow):
                 'english': str(self.flow_state.get('formatted_summary', '')),
                 **self.flow_state.get('translations', {})
             }
-            
+
             # Guardrail: Check if English summary exists
             if not all_content['english'] or len(all_content['english']) < 50:
                 logger.error("No valid English summary to send")
                 return {"status": "send_failed", "error": "No valid English summary"}
-            
-            send_agent = self.agents.send_agent()
-            send_task = self.tasks.send_to_telegram()
-            send_task.context = [all_content]
-            
-            crew = Crew(
-                agents=[send_agent],
-                tasks=[send_task],
-                process=Process.sequential,
-                verbose=True
-            )
-            
-            result = crew.kickoff()
-            logger.info("Successfully sent to Telegram")
-            return {"status": "send_completed", "result": result.output if hasattr(result, 'output') else str(result)}
+
+            # Directly use TelegramSender
+            send_result = self.telegram_sender.send_multiple_languages(all_content)
+            logger.info(f"Telegram send result: {send_result}")
+
+            return {"status": "send_completed", "result": send_result}
         except Exception as e:
             logger.error(f"Error in send step: {str(e)}")
             return {"status": "send_failed", "error": str(e)}

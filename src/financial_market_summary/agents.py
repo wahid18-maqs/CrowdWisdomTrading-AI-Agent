@@ -1,4 +1,4 @@
-from crewai import Agent
+from crewai import Agent,LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 import os
@@ -6,7 +6,7 @@ from .tools.tavily_search import TavilyFinancialTool, SerperFinancialTool
 from .tools.telegram_sender import TelegramSender
 from .tools.image_finder import ImageFinder
 from .tools.translator import MultiLanguageTranslator
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 class FinancialAgents:
     """Factory class for creating specialized financial AI agents"""
@@ -19,11 +19,10 @@ class FinancialAgents:
         self.image_finder = ImageFinder()
         self.translator = MultiLanguageTranslator()
         
-        # Initialize the Groq LLM client
-        self.groq_llm = ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
-            model_name="groq/meta-llama/llama-4-scout-17b-16e-instruct",
-            temperature=0.3
+        # Initialize the Gemini LLM client
+        self.llm = LLM(
+            model="gemini/gemini-1.5-flash",
+            api_key=os.getenv("GOOGLE_API_KEY")
         )
 
     def search_agent(self):
@@ -42,7 +41,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=3,
-            llm=self.groq_llm
+            llm=self.gemini_llm # Use the new Gemini LLM object
         )
     
     def summary_agent(self):
@@ -63,7 +62,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm=self.groq_llm
+            llm=self.gemini_llm # Use the new Gemini LLM object
         )
     
     def formatting_agent(self):
@@ -84,7 +83,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm=self.groq_llm
+            llm=self.gemini_llm # Use the new Gemini LLM object
         )
     
     def translation_agent(self):
@@ -106,7 +105,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm=self.groq_llm
+            llm=self.gemini_llm # Use the new Gemini LLM object
         )
     
     def send_agent(self):
@@ -128,7 +127,7 @@ class FinancialAgents:
             memory=True,
             allow_delegation=False,
             max_iter=2,
-            llm=self.groq_llm
+            llm=self.gemini_llm # Use the new Gemini LLM object
         )
     
     def create_crew_agents(self):
@@ -167,7 +166,7 @@ class FinancialAgents:
             "verbose": True,
             "memory": True,
             "allow_delegation": False,
-            "llm": self.groq_llm
+            "llm": self.gemini_llm # Change 4: Use the new Gemini LLM object
         }
         
         # Merge configurations

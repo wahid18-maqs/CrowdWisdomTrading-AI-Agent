@@ -1,11 +1,15 @@
 from crewai.tools import BaseTool
 from typing import Type, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import os
 import logging
-from litellm import completion
 import requests
 import json
+import re
+
+# New imports for Gemini integration
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import SystemMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +27,19 @@ class MultiLanguageTranslator(BaseTool):
     )
     args_schema: Type[BaseModel] = TranslatorInput
     financial_glossary: Dict[str, Dict[str, str]] = {}
+    
+    # We no longer need this, as we're using a private attribute now.
+    # model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self):
         super().__init__()
         self.financial_glossary = self._load_financial_glossary()
+        # Store the LLM as a private attribute to avoid Pydantic validation issues
+        self._gemini_llm = ChatGoogleGenerativeAI( # Change 1: Use ChatGoogleGenerativeAI
+            model="gemini-1.5-flash", # Change 2: Specify the Gemini model
+            temperature=0.3,
+            google_api_key=os.getenv("GOOGLE_API_KEY") # Change 3: Use the correct environment variable
+        )
     
     def _run(self, text: str, target_language: str, preserve_formatting: bool = True) -> str:
         """
@@ -38,21 +51,14 @@ class MultiLanguageTranslator(BaseTool):
             if target_language.lower() not in supported_languages:
                 return f"Error: Unsupported language '{target_language}'. Supported: {supported_languages}"
             
-            # Try primary translation method (LiteLLM)
-            result = self._translate_with_litellm(text, target_language, preserve_formatting)
+            # Use primary translation method (Gemini) only
+            result = self._translate_with_gemini(text, target_language, preserve_formatting) # Change 4: Call the new method
             
             if "Error:" not in result:
-                logger.info(f"Successfully translated to {target_language} using LiteLLM")
+                logger.info(f"Successfully translated to {target_language} using Gemini")
                 return result
             
-            # Fallback to Google Translate API if available
-            logger.warning("LiteLLM translation failed, trying Google Translate")
-            fallback_result = self._translate_with_google(text, target_language)
-            
-            if fallback_result:
-                return fallback_result
-            
-            # Final fallback - return original with note
+            # Return error if Gemini translation fails
             return f"Translation to {target_language} unavailable. Original text:\n\n{text}"
             
         except Exception as e:
@@ -60,8 +66,8 @@ class MultiLanguageTranslator(BaseTool):
             logger.error(error_msg)
             return error_msg
     
-    def _translate_with_litellm(self, text: str, target_language: str, preserve_formatting: bool) -> str:
-        """Translate using LiteLLM with financial context"""
+    def _translate_with_gemini(self, text: str, target_language: str, preserve_formatting: bool) -> str:
+        """Translate using Gemini with financial context"""
         try:
             # Language mapping for API
             language_codes = {
@@ -76,42 +82,36 @@ class MultiLanguageTranslator(BaseTool):
             system_prompt = f"""You are a professional financial translator specializing in translating financial market content to {target_lang_name}.
 
 CRITICAL REQUIREMENTS:
-1. Translate the financial summary while preserving all financial terminology accuracy
-2. Keep stock symbols (like AAPL, MSFT) unchanged
-3. Preserve numbers, percentages, and currency values exactly
-4. Maintain the structure and formatting of the text
-5. Use appropriate financial terminology in {target_lang_name}
-6. If unsure about financial terms, provide the English term in parentheses
+1. Translate the financial summary while preserving all financial terminology accuracy.
+2. Keep stock symbols (like AAPL, MSFT) unchanged.
+3. Preserve numbers, percentages, and currency values exactly.
+4. Maintain the structure and formatting of the text.
+5. Use appropriate financial terminology in {target_lang_name}.
+6. If unsure about financial terms, provide the English term in parentheses.
 
 Financial context: This is a daily financial market summary containing stock market news, trading activity, and market analysis."""
 
-            formatting_instruction = ""
-            if preserve_formatting:
-                formatting_instruction = "\n7. Preserve any markdown formatting (**, *, headers, etc.)"
-            
             user_prompt = f"""Translate this financial content to {target_lang_name}:
 
 {text}
 
 Requirements:
 - Maintain financial accuracy
-- Keep stock symbols unchanged  
+- Keep stock symbols unchanged 
 - Preserve numerical data exactly
-- Use proper financial terminology{formatting_instruction}
+- Use proper financial terminology
+- Preserve any markdown formatting (**, *, headers, etc.)
 - Provide a natural, professional translation suitable for financial professionals"""
 
-            # Make API call
-            response = completion(
-                model="gpt-3.5-turbo",  # You can change this to any model
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,  # Lower temperature for more consistent translations
-                max_tokens=2000
-            )
+            # Make API call using ChatGoogleGenerativeAI
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
             
-            translated_text = response.choices[0].message.content.strip()
+            response = self._gemini_llm.invoke(messages) # Change 5: Use the new LLM object
+            
+            translated_text = response.content.strip()
             
             # Post-process to ensure financial terms are preserved
             processed_text = self._post_process_translation(translated_text, text, target_language)
@@ -119,56 +119,13 @@ Requirements:
             return processed_text
             
         except Exception as e:
-            error_msg = f"LiteLLM translation error: {str(e)}"
+            error_msg = f"Gemini translation error: {str(e)}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
-    
-    def _translate_with_google(self, text: str, target_language: str) -> str:
-        """Fallback translation using Google Translate API"""
-        try:
-            google_api_key = os.getenv('GOOGLE_TRANSLATE_API_KEY')
-            if not google_api_key:
-                return None
-            
-            # Language codes for Google Translate
-            lang_codes = {
-                'arabic': 'ar',
-                'hindi': 'hi',
-                'hebrew': 'he'
-            }
-            
-            target_code = lang_codes.get(target_language.lower())
-            if not target_code:
-                return None
-            
-            url = f"https://translation.googleapis.com/language/translate/v2?key={google_api_key}"
-            
-            payload = {
-                'q': text,
-                'target': target_code,
-                'source': 'en',
-                'format': 'text'
-            }
-            
-            response = requests.post(url, data=payload, timeout=30)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if 'data' in result and 'translations' in result['data']:
-                translated = result['data']['translations'][0]['translatedText']
-                return self._post_process_translation(translated, text, target_language)
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Google Translate error: {e}")
-            return None
     
     def _post_process_translation(self, translated: str, original: str, target_language: str) -> str:
         """Post-process translation to fix financial terms and formatting"""
         try:
-            import re
             
             # Extract stock symbols from original text (2-5 uppercase letters)
             stock_symbols = re.findall(r'\b[A-Z]{2,5}\b', original)
@@ -276,7 +233,6 @@ Requirements:
         )
         
         # Check if numbers are preserved (basic check)
-        import re
         original_numbers = set(re.findall(r'\d+\.?\d*', original))
         translated_numbers = set(re.findall(r'\d+\.?\d*', translated))
         validation_results['preserved_numbers'] = len(original_numbers & translated_numbers) > 0

@@ -26,7 +26,7 @@ search_agent:
     - tavily_financial_search
     - serper_financial_search
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.3
     max_tokens: 500
 
@@ -35,7 +35,7 @@ summary_agent:
     Senior Financial Market Analyst
   goal: >
     Create concise, actionable financial market summaries under 500 words that provide 
-    valuable insights for traders and investors
+     valuable insights for traders and investors
   backstory: >
     You are a seasoned financial analyst with 20+ years of experience in equity research 
     and market analysis. You have worked at top-tier investment banks including Goldman 
@@ -54,7 +54,7 @@ summary_agent:
   allow_delegation: false
   tools: []
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.4
     max_tokens: 500
 
@@ -83,7 +83,7 @@ formatting_agent:
   tools:
     - financial_image_finder
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.3
     max_tokens: 500
 
@@ -113,7 +113,7 @@ translation_agent:
   tools:
     - financial_translator
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.2
     max_tokens: 500
 
@@ -143,7 +143,7 @@ send_agent:
   tools:
     - telegram_sender
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.3
     max_tokens: 500
 
@@ -168,7 +168,7 @@ analysis_agent:
   allow_delegation: false
   tools: []
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.4
     max_tokens: 500
 
@@ -193,7 +193,7 @@ trading_specialist:
   allow_delegation: false
   tools: []
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.3
     max_tokens: 500
 
@@ -208,18 +208,16 @@ risk_monitoring_agent:
     and risk management at hedge funds and investment banks. You have expertise in 
     statistical analysis, market microstructure, and behavioral finance. You excel at 
     detecting unusual market patterns, identifying potential market disruptions, and 
-    assessing systemic risks. You understand market anomalies, correlation breakdowns, 
-    and early warning signals that precede major market moves. Your analysis has helped 
-    institutions avoid significant losses and capitalize on market dislocations. You are 
-    skilled at combining quantitative analysis with qualitative market intelligence to 
-    provide comprehensive risk assessment.
+    assessing systemic risks. Your analysis has helped institutions avoid significant 
+    losses and capitalize on market dislocations. You are skilled at combining quantitative 
+    analysis with qualitative market intelligence to provide comprehensive risk assessment.
   verbose: true
   memory: true
   max_iter: 2
   allow_delegation: false
   tools: []
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.2
     max_tokens: 500
 
@@ -229,7 +227,7 @@ agent_defaults:
   memory: true
   allow_delegation: false
   step_callback: null
-  max_execution_time: 300  # 5 minutes max per agent
+  max_execution_time: 300   # 5 minutes max per agent
   system_template: >
     You are a professional financial expert working for CrowdWisdomTrading AI Agent. 
     Always maintain the highest standards of financial analysis and communication. 
@@ -238,7 +236,7 @@ agent_defaults:
   
 llm_defaults:
   llm:
-    model: "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: "gemini-1.5-flash"
     temperature: 0.3
     max_tokens: 500
     top_p: 1.0

@@ -711,9 +711,3 @@ metadata:
     
     For assessment purposes, ensure all required API keys are configured
     in the .env file before execution.
-  
-  # Contact Information
-  support:
-    technical_contact: "intern-assessment@crowdwisdomtrading.com"
-    documentation_url: "https://github.com/yourusername/crowdwisdom-financial-ai-agent"
-    issue_reporting: "GitHub Issues"

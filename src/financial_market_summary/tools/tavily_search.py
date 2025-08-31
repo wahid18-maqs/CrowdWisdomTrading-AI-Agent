@@ -5,8 +5,11 @@ import requests
 import os
 from datetime import datetime, timedelta
 import logging
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+load_dotenv(r"C:\Users\wahid\Desktop\financial_market_summary\.env")
 
 class TavilySearchInput(BaseModel):
     """Input schema for Tavily search tool."""
