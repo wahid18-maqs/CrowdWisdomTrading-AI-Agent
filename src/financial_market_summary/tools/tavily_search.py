@@ -17,6 +17,16 @@ class TavilySearchInput(BaseModel):
     hours_back: int = Field(default=1, description="Number of hours back to search")
     max_results: int = Field(default=10, description="Maximum number of results")
 
+class TavilySearchTool(BaseTool):
+    name: str = "tavily_search_tool"
+    description: str = "Generic Tavily search tool for financial queries"
+    args_schema: Type[BaseModel] = TavilySearchInput
+
+    def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
+        """Run a generic Tavily search (delegates to TavilyFinancialTool)"""
+        tavily_financial_tool = TavilyFinancialTool()
+        return tavily_financial_tool._run(query, hours_back, max_results)
+
 class TavilyFinancialTool(BaseTool):
     name: str = "tavily_financial_search"
     description: str = (
@@ -27,7 +37,7 @@ class TavilyFinancialTool(BaseTool):
 
     def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
         """
-        Search for financial news using Tavily API
+        Search for financial news using Tavily API with a strict time limit
         """
         try:
             tavily_api_key = os.getenv('TAVILY_API_KEY')
@@ -38,7 +48,7 @@ class TavilyFinancialTool(BaseTool):
             financial_query = f"{query} US stock market trading financial news"
             
             # Calculate time range
-            end_time = datetime.now()
+            end_time = datetime.utcnow()
             start_time = end_time - timedelta(hours=hours_back)
             
             # Tavily API endpoint
@@ -61,7 +71,9 @@ class TavilyFinancialTool(BaseTool):
                     "benzinga.com",
                     "seekingalpha.com"
                 ],
-                "exclude_domains": ["reddit.com", "twitter.com"]
+                "exclude_domains": ["reddit.com", "twitter.com"],
+                "start_published_date": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_published_date": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
             
             response = requests.post(url, json=payload, timeout=30)
@@ -69,10 +81,25 @@ class TavilyFinancialTool(BaseTool):
             
             data = response.json()
             
-            # Format results
+            # Extra safeguard: filter results manually by published date
+            filtered_results = []
+            for r in data.get("results", []):
+                published = r.get("published_date")
+                if published:
+                    try:
+                        published_dt = datetime.strptime(published, "%Y-%m-%dT%H:%M:%SZ")
+                        if published_dt >= start_time:
+                            filtered_results.append(r)
+                    except:
+                        filtered_results.append(r)  # keep if parsing fails
+                else:
+                    filtered_results.append(r)
+
+            data["results"] = filtered_results
+            
             formatted_results = self._format_search_results(data, start_time)
             
-            logger.info(f"Tavily search completed: {len(data.get('results', []))} results found")
+            logger.info(f"Tavily search completed: {len(data.get('results', []))} results found (time limit: {hours_back}h)")
             return formatted_results
             
         except requests.exceptions.RequestException as e:
@@ -84,6 +111,7 @@ class TavilyFinancialTool(BaseTool):
             error_msg = f"Tavily search error: {str(e)}"
             logger.error(error_msg)
             return error_msg
+
     
     def _format_search_results(self, data: dict, start_time: datetime) -> str:
         """Format Tavily search results for financial analysis"""
