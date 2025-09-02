@@ -1,10 +1,11 @@
-# Fixed translator.py with proper Gemini integration
+# Fixed translator.py with better error handling and rate limiting
 from crewai.tools import BaseTool
 from typing import Type, Dict, Any
 from pydantic import BaseModel, Field
 import os
 import logging
 import re
+import time
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -22,33 +23,64 @@ class MultiLanguageTranslator(BaseTool):
 
     def __init__(self):
         super().__init__()
-        try:
-            self._gemini_llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
-                temperature=0.3,
-                google_api_key=os.getenv("GOOGLE_API_KEY")
-            )
-            logger.info("Gemini LLM initialized successfully for translation")
-        except Exception as e:
-            logger.error(f"Failed to initialize Gemini LLM: {e}")
-            self._gemini_llm = None
+        self._gemini_llm = None
+        self._init_gemini_with_retry()
+    
+    def _init_gemini_with_retry(self, max_retries=3):
+        """Initialize Gemini with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                google_api_key = os.getenv("GOOGLE_API_KEY")
+                if not google_api_key:
+                    logger.error("GOOGLE_API_KEY not found in environment variables")
+                    return
+                
+                self._gemini_llm = ChatGoogleGenerativeAI(
+                    model="gemini-1.5-flash",
+                    temperature=0.2,  # Lower temperature for more consistent translations
+                    google_api_key=google_api_key,
+                    request_timeout=60,
+                    # Add retry configuration
+                    max_retries=2
+                )
+                
+                # Test the connection with a simple call
+                test_response = self._gemini_llm.invoke([HumanMessage(content="Hello")])
+                logger.info("Gemini LLM initialized and tested successfully for translation")
+                return
+                
+            except Exception as e:
+                logger.warning(f"Gemini initialization attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    logger.error("Failed to initialize Gemini LLM after all attempts")
     
     def _run(self, text: str, target_language: str) -> str:
         """Translate text to target language with financial context"""
         try:
             if not self._gemini_llm:
-                return f"Error: Gemini LLM not initialized. Cannot translate to {target_language}"
+                # Try to reinitialize
+                self._init_gemini_with_retry()
+                if not self._gemini_llm:
+                    return f"Error: Gemini LLM not available. Cannot translate to {target_language}"
             
             # Validate target language
             supported_languages = ['arabic', 'hindi', 'hebrew']
             if target_language.lower() not in supported_languages:
                 return f"Error: Unsupported language '{target_language}'. Supported: {supported_languages}"
             
-            result = self._translate_with_gemini(text, target_language)
+            # Preprocess text to preserve important elements
+            processed_text, preserved_elements = self._preprocess_text(text)
+            
+            # Perform translation with retry logic
+            result = self._translate_with_retry(processed_text, target_language, max_retries=3)
             
             if not result.startswith("Error:"):
+                # Restore preserved elements
+                final_result = self._restore_preserved_elements(result, preserved_elements)
                 logger.info(f"Successfully translated to {target_language}")
-                return result
+                return final_result
             else:
                 return result
             
@@ -57,75 +89,121 @@ class MultiLanguageTranslator(BaseTool):
             logger.error(error_msg)
             return error_msg
     
+    def _preprocess_text(self, text: str) -> tuple[str, Dict[str, str]]:
+        """Preprocess text to preserve financial elements"""
+        preserved_elements = {}
+        processed_text = text
+        
+        # Preserve stock symbols
+        stock_symbols = re.findall(r'\b[A-Z]{2,5}\b', text)
+        for i, symbol in enumerate(stock_symbols):
+            placeholder = f"__STOCK_SYMBOL_{i}__"
+            preserved_elements[placeholder] = symbol
+            processed_text = processed_text.replace(symbol, placeholder, 1)
+        
+        # Preserve currency values
+        currency_values = re.findall(r'\$[\d,]+\.?\d*', text)
+        for i, value in enumerate(currency_values):
+            placeholder = f"__CURRENCY_{i}__"
+            preserved_elements[placeholder] = value
+            processed_text = processed_text.replace(value, placeholder, 1)
+        
+        # Preserve percentages
+        percentages = re.findall(r'[\d,]+\.?\d*%', text)
+        for i, percent in enumerate(percentages):
+            placeholder = f"__PERCENT_{i}__"
+            preserved_elements[placeholder] = percent
+            processed_text = processed_text.replace(percent, placeholder, 1)
+        
+        return processed_text, preserved_elements
+    
+    def _restore_preserved_elements(self, translated_text: str, preserved_elements: Dict[str, str]) -> str:
+        """Restore preserved elements after translation"""
+        result = translated_text
+        for placeholder, original_value in preserved_elements.items():
+            result = result.replace(placeholder, original_value)
+        return result
+    
+    def _translate_with_retry(self, text: str, target_language: str, max_retries: int = 3) -> str:
+        """Translate using Gemini with retry logic"""
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    wait_time = 5 + (attempt * 2)  # Increasing wait time
+                    logger.info(f"Translation retry attempt {attempt + 1} for {target_language}, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                
+                result = self._translate_with_gemini(text, target_language)
+                
+                if not result.startswith("Error:"):
+                    return result
+                else:
+                    logger.warning(f"Translation attempt {attempt + 1} failed: {result}")
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        return result
+                        
+            except Exception as e:
+                error_msg = str(e)
+                logger.warning(f"Translation attempt {attempt + 1} exception: {error_msg}")
+                
+                if "429" in error_msg or "quota" in error_msg.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = 10 + (attempt * 5)  # Longer wait for rate limits
+                        logger.info(f"Rate limit detected, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                
+                if attempt == max_retries - 1:
+                    return f"Error: Translation failed after {max_retries} attempts - {error_msg}"
+        
+        return f"Error: Translation failed after {max_retries} attempts"
+    
     def _translate_with_gemini(self, text: str, target_language: str) -> str:
         """Translate using Gemini with financial context"""
         try:
             language_codes = {
-                'arabic': 'Arabic',
-                'hindi': 'Hindi', 
-                'hebrew': 'Hebrew'
+                'arabic': 'Arabic (العربية)',
+                'hindi': 'Hindi (हिन्दी)', 
+                'hebrew': 'Hebrew (עברית)'
             }
             
             target_lang_name = language_codes[target_language.lower()]
             
-            system_prompt = f"""You are a professional financial translator specializing in {target_lang_name}.
+            # Shorter, more focused prompt to reduce token usage
+            system_prompt = f"""You are a professional financial translator. Translate to {target_lang_name}.
 
-CRITICAL REQUIREMENTS:
-1. Translate financial content accurately to {target_lang_name}
-2. Keep stock symbols (AAPL, MSFT, etc.) UNCHANGED
-3. Preserve all numbers, percentages, and currency values EXACTLY
-4. Maintain markdown formatting (**, *, headers)
-5. Use proper financial terminology in {target_lang_name}
-6. If unsure about financial terms, keep English term in parentheses
+RULES:
+1. Keep stock symbols unchanged (AAPL, MSFT, etc.)
+2. Preserve numbers, percentages, currency exactly
+3. Keep markdown formatting (**, *, #)
+4. Use professional financial terms
+5. Keep English financial terms in () if needed"""
 
-This is a financial market summary for professional traders and investors."""
-
-            user_prompt = f"""Translate this financial content to {target_lang_name}:
-
-{text}
-
-Remember:
-- Keep stock symbols unchanged 
-- Preserve numerical data exactly
-- Use professional financial terminology
-- Maintain markdown formatting"""
+            user_prompt = f"Translate this financial content to {target_lang_name}:\n\n{text}"
 
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
             
+            # Make the API call
             response = self._gemini_llm.invoke(messages)
             translated_text = response.content.strip()
             
-            # Post-process to ensure accuracy
-            processed_text = self._post_process_translation(translated_text, text, target_language)
+            # Quick validation
+            if len(translated_text) < 10:
+                return f"Error: Translation too short for {target_language}"
             
-            return processed_text
-            
-        except Exception as e:
-            return f"Error: Gemini translation failed - {str(e)}"
-    
-    def _post_process_translation(self, translated: str, original: str, target_language: str) -> str:
-        """Post-process translation to preserve financial terms"""
-        try:
-            # Preserve stock symbols
-            stock_symbols = re.findall(r'\b[A-Z]{2,5}\b', original)
-            for symbol in stock_symbols:
-                # Ensure symbols aren't altered
-                translated = re.sub(f'\\b{re.escape(symbol)}\\w*\\b', symbol, translated, flags=re.IGNORECASE)
-            
-            # Preserve currency and percentages
-            currency_patterns = [r'\$[\d,]+\.?\d*', r'[\d,]+\.?\d*%', r'[\d]+\.?\d*[MBK]?']
-            for pattern in currency_patterns:
-                original_values = re.findall(pattern, original)
-                for value in original_values:
-                    if value not in translated:
-                        # Attempt to replace number without comma with the original value with comma
-                        translated = translated.replace(value.replace(',', ''), value)
-            
-            return translated
+            return translated_text
             
         except Exception as e:
-            logger.warning(f"Post-processing error: {e}")
-            return translated
+            error_msg = str(e)
+            if "429" in error_msg:
+                return f"Error: Rate limit exceeded - {error_msg}"
+            elif "quota" in error_msg.lower():
+                return f"Error: API quota exceeded - {error_msg}"
+            else:
+                return f"Error: Gemini translation failed - {error_msg}"
