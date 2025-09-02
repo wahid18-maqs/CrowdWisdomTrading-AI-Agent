@@ -2,6 +2,7 @@
 import os
 import requests
 import logging
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from crewai.tools import BaseTool
@@ -257,11 +258,9 @@ class TelegramSender(BaseTool):
     def _get_language_footer(self, language: str) -> str:
         """Get appropriate footer for each language"""
         footers = {
-            'english': "📊 *Powered by AI Financial Analysis*",
-            'arabic': "📊 *مدعوم بتحليل مالي بالذكاء الاصطناعي*",
-            'hindi': "📊 *एआई वित्तीय विश्लेषण द्वारा संचालित*",
-            'hebrew': "📊 *מופעל על ידי ניתוח פיננסי AI*"
+            'english': "📊 *Powered by CrowdWisdomTrading*",
+            'arabic': "📊 *مدعوم من CrowdWisdomTrading*",
+            'hindi': "📊 *CrowdWisdomTrading द्वारा संचालित*",
+            'hebrew': "📊 *מופעל על ידי CrowdWisdomTrading*"
         }
         return footers.get(language.lower(), footers['english'])
-
-import time  # Add missing import
