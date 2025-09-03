@@ -149,7 +149,7 @@ def test_api_connections():
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
         gemini_llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             temperature=0.3,
             google_api_key=os.getenv("GOOGLE_API_KEY")
         )

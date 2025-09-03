@@ -9,11 +9,24 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+from datetime import datetime
 
-# Add src directory to path
+# Add the correct path to find the module
 current_dir = Path(__file__).parent
-src_dir = current_dir / "src"
+if current_dir.name == 'tests':
+    # If running from tests folder, go up one level
+    project_root = current_dir.parent
+else:
+    # If running from project root
+    project_root = current_dir
+
+# Add src directory to Python path
+src_dir = project_root / "src"
 sys.path.insert(0, str(src_dir))
+
+print(f"🔍 Project root: {project_root}")
+print(f"🔍 Source directory: {src_dir}")
+print(f"🔍 Current working directory: {Path.cwd()}")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,9 +35,13 @@ logger = logging.getLogger(__name__)
 def test_image_finder():
     """Test the image finder with real financial content"""
     
-    load_dotenv()
+    # Load environment variables from project root
+    env_file = project_root / ".env"
+    load_dotenv(env_file)
     
     try:
+        # Try to import the image finder
+        logger.info(f"Attempting to import from: {src_dir}")
         from financial_market_summary.tools.image_finder import ImageFinder
         
         # Create image finder instance
@@ -111,8 +128,20 @@ def test_image_finder():
         
         return True
         
+    except ImportError as e:
+        logger.error(f"❌ Import error: {e}")
+        logger.error(f"Make sure you're running from the correct directory")
+        logger.error(f"Expected file structure:")
+        logger.error(f"  {project_root}/")
+        logger.error(f"  ├── src/financial_market_summary/tools/image_finder.py")
+        logger.error(f"  ├── tests/test_images.py (current file)")
+        logger.error(f"  └── .env")
+        return False
+        
     except Exception as e:
         logger.error(f"❌ Image finder test failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def test_specific_chart_urls():
@@ -206,9 +235,9 @@ Successfully found {len(working_charts)} working financial chart URLs.
 These images can be used in the actual financial summaries.
 """
     
-    # Save to file
+    # Save to file in project root
     try:
-        test_file = Path("test_financial_images.md")
+        test_file = project_root / "test_financial_images.md"
         with open(test_file, 'w', encoding='utf-8') as f:
             f.write(markdown_content)
         
@@ -224,9 +253,41 @@ These images can be used in the actual financial summaries.
     except Exception as e:
         logger.error(f"❌ Failed to save test markdown: {e}")
 
+def check_file_structure():
+    """Check if the expected file structure exists"""
+    logger.info("\n🔍 Checking file structure...")
+    
+    required_files = [
+        src_dir / "financial_market_summary" / "__init__.py",
+        src_dir / "financial_market_summary" / "tools" / "__init__.py", 
+        src_dir / "financial_market_summary" / "tools" / "image_finder.py",
+        project_root / ".env"
+    ]
+    
+    missing_files = []
+    for file_path in required_files:
+        if file_path.exists():
+            logger.info(f"  ✅ Found: {file_path}")
+        else:
+            logger.error(f"  ❌ Missing: {file_path}")
+            missing_files.append(file_path)
+    
+    if missing_files:
+        logger.error(f"❌ Missing {len(missing_files)} required files")
+        return False
+    else:
+        logger.info("✅ All required files found")
+        return True
+
 if __name__ == "__main__":
     print("🧪 Financial Image Finder Test Suite")
     print("="*50)
+    
+    # First check file structure
+    logger.info("Step 0: File Structure Check")
+    if not check_file_structure():
+        print("❌ File structure check failed - please fix missing files first")
+        sys.exit(1)
     
     # Test 1: Basic image finder functionality
     logger.info("Test 1: Basic Image Finder Functionality")
@@ -241,11 +302,8 @@ if __name__ == "__main__":
         
         print("\n🎉 All tests completed!")
         print("💡 If images are displaying correctly, the image finder is working properly")
+        print(f"💡 Now you can run the main workflow from: {project_root}")
         
     else:
         logger.error("❌ Image finder test failed")
         print("\n❌ Tests failed - check the logs above for details")
-
-# Move import to top
-from datetime import datetime
-import datetime as dt

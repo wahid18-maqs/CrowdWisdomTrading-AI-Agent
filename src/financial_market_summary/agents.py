@@ -38,7 +38,7 @@ class FinancialAgents:
             
             # Configure LLM with more conservative settings for free tier
             llm = LLM(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash",
                 api_key=google_api_key,
                 temperature=0.3,
                 max_tokens=2048,  # Limit token usage
@@ -53,7 +53,7 @@ class FinancialAgents:
             logger.error(f"Failed to initialize Gemini LLM: {e}")
             # Fallback to a simple configuration
             return LLM(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash",
                 api_key=os.getenv("GOOGLE_API_KEY", ""),
                 temperature=0.3
             )
