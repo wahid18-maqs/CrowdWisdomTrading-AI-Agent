@@ -1,713 +1,299 @@
-# CrowdWisdomTrading AI Agent - Complete Crew Configuration
-# Professional Financial Market Analysis System
-
-# ========================================
-# CREW METADATA AND BASIC SETTINGS
-# ========================================
 crew_config:
   name: "CrowdWisdomTrading Financial AI Agent"
-  description: "Advanced multi-agent system for comprehensive financial market analysis and multi-language summary generation"
-  version: "1.0.0"
-  author: "CrowdWisdomTrading Intern Assessment"
-  created_date: "2024-01-15"
-  
-  # Core Execution Settings
-  process: "sequential"  # Options: sequential, hierarchical, parallel
+  description: "Sequential 5-phase financial workflow: Search → Summary → Format → Translate → Send"
+  process: "sequential"
   verbose: true
   memory: true
-  cache: true
-  max_rpm: 60  # API requests per minute limit
-  max_execution_time: 900  # 15 minutes total timeout
+  max_execution_time: 900  # 15 minutes
   
-  # CrewAI Flow Configuration
-  flow_settings:
-    enable_guardrails: true
-    enable_error_recovery: true
-    enable_parallel_execution: false  # Can be enabled for advanced sequences
-    checkpoint_interval: 30  # Save state every 30 seconds
-    enable_validation: true
-    strict_mode: true
-  
-  # Agent Collaboration Settings
-  collaboration:
-    allow_delegation: false  # Keep tasks focused per agent
-    enable_feedback_loops: true
-    share_memory: true
-    cross_agent_communication: true
-    memory_persistence: true
-  
-  # Output and Results Management
-  output_settings:
-    save_results: true
-    output_directory: "outputs"
-    include_metadata: true
-    format_timestamps: true
-    preserve_intermediate_results: true
-    auto_cleanup_old_results: false  # Keep for assessment review
+  # Retry Configuration (matches Python retry logic)
+  retry_settings:
+    max_retries: 3
+    initial_wait_time: 5
+    backoff_multiplier: 1  # 5s, 10s, 15s
+    retry_on_errors:
+      - "429"  # Rate limit
+      - "quota"
+      - "rate limit"
 
-# ========================================
-# FINANCIAL MARKET CONFIGURATION
-# ========================================
-financial_config:
-  market_focus: "US"
-  market_timezone: "US/Eastern"
-  
-  # US Market Operating Hours
-  market_hours:
-    open_time: "09:30"  # 9:30 AM ET
-    close_time: "16:00"  # 4:00 PM ET
-    pre_market_start: "04:00"  # 4:00 AM ET
-    after_hours_end: "20:00"  # 8:00 PM ET
-  
-  # Optimal Agent Execution Time
-  optimal_run_time:
-    time: "01:30"  # 1:30 AM IST (after US market close)
-    timezone: "Asia/Kolkata"
-    description: "Post US market close analysis"
-    buffer_minutes: 30  # Wait 30 min after market close
-  
-  # Financial Data Sources Priority
-  data_sources:
-    primary_sources:
-      - "bloomberg.com"
-      - "reuters.com"
-      - "cnbc.com"
-      - "marketwatch.com"
-    secondary_sources:
-      - "yahoo.com/finance"
-      - "investing.com"
-      - "benzinga.com"
-      - "seekingalpha.com"
-      - "finviz.com"
-    excluded_sources:
-      - "reddit.com"
-      - "twitter.com"
-      - "stocktwits.com"
-      - "facebook.com"
-  
-  # Content Quality Requirements
-  content_requirements:
-    summary_max_words: 500
-    summary_min_words: 200
-    required_sections:
-      - "Market Overview"
-      - "Key Movers"
-      - "Sector Analysis"
+
+# WORKFLOW PHASES CONFIGURATION
+
+workflow_phases:
+  # Phase 1: Search
+  search_phase:
+    description: "Search for latest US financial news from past 2 hours"
+    focus: "Major stock movements, earnings, economic data"
+    expected_output: "Structured list of recent US financial news with titles, summaries, sources"
+    timeout_seconds: 120
+    
+  # Phase 2: Summary  
+  summary_phase:
+    description: "Create concise market summary under 500 words"
+    structure:
+      - "Market Overview (2-3 sentences)"
+      - "Key Movers (top stocks)"
+      - "Sector Analysis" 
       - "Economic Highlights"
-      - "Forward Outlook"
-    required_elements:
-      - stock_symbols
-      - percentage_changes
-      - sector_analysis
-      - economic_highlights
-      - numerical_data
-      - professional_terminology
-
-# ========================================
-# MULTI-LANGUAGE CONFIGURATION
-# ========================================
-language_settings:
-  default_language: "english"
-  target_languages:
-    - arabic
-    - hindi
-    - hebrew
-  
-  # Translation Quality Standards
-  translation_quality:
-    accuracy_threshold: 0.9
-    consistency_check: true
-    financial_terminology_validation: true
-    preserve_formatting: true
-    cultural_appropriateness_check: true
-  
-  # Language-Specific Settings
-  language_specific_config:
-    arabic:
-      script: "arabic"
-      direction: "rtl"
-      encoding: "utf-8"
-      locale: "ar_SA"
-      font_family: "Traditional Arabic"
-      currency_format: "SAR"
-    hindi:
-      script: "devanagari"
-      direction: "ltr"
-      encoding: "utf-8"
-      locale: "hi_IN"
-      font_family: "Devanagari"
-      currency_format: "INR"
-    hebrew:
-      script: "hebrew"
-      direction: "rtl"
-      encoding: "utf-8"
-      locale: "he_IL"
-      font_family: "Hebrew"
-      currency_format: "ILS"
-  
-  # Financial Terminology Preservation
-  preserve_elements:
-    - stock_symbols  # AAPL, MSFT, etc.
-    - currency_amounts  # $100, €50, etc.
-    - percentages  # 5.2%, -3.1%, etc.
-    - numerical_data  # Market cap, volume, etc.
-    - technical_terms  # P/E ratio, EBITDA, etc.
-    - time_references  # Market open/close times
-
-# ========================================
-# TELEGRAM DELIVERY CONFIGURATION
-# ========================================
-telegram_config:
-  # Message Delivery Settings
-  delivery_settings:
+      - "Tomorrow's Watch"
+    requirements:
+      - "Professional language"
+      - "Specific figures"
+      - "Under 500 words"
+    rate_limiting: "gemini"
+    timeout_seconds: 180
+    
+  # Phase 3: Formatting
+  formatting_phase:
+    description: "Format summary with 1-2 relevant charts/images"
+    requirements:
+      - "Use financial_image_finder tool"
+      - "Integrate images with markdown format"
+      - "Well-formatted final summary"
+    rate_limiting: "gemini" 
+    timeout_seconds: 150
+    
+  # Phase 4: Translation
+  translation_phase:
+    description: "Translate to Arabic, Hindi, Hebrew"
+    languages: ["arabic", "hindi", "hebrew"]
+    requirements:
+      - "Keep stock symbols unchanged (AAPL, MSFT, etc.)"
+      - "Preserve all numbers, percentages, currency values"
+      - "Maintain markdown formatting"
+      - "Use professional financial terminology"
+      - "If unsure, keep English in parentheses"
+    timeout_seconds: 120
+    
+  # Phase 5: Sending
+  sending_phase:
+    description: "Send to Telegram channels"
     send_order:
       1: "english"
-      2: "arabic"
+      2: "arabic" 
       3: "hindi"
       4: "hebrew"
-    message_delay_seconds: 2  # Prevent rate limiting
+    message_delay_seconds: 2
+    timeout_seconds: 90
+
+# AGENT CONFIGURATION 
+
+agents:
+  search_agent:
+    role: "Financial News Search Specialist"
+    goal: "Search and gather the latest US financial news and market data efficiently."
+    backstory: >
+      You are an expert financial news researcher with deep knowledge of
+      US markets. You excel at finding the most relevant and recent financial news from
+      reliable sources like Bloomberg, Reuters, CNBC, and MarketWatch. You work efficiently
+      to minimize API calls while maximizing information quality.
+    tools: ["tavily_financial_search", "serper_financial_search"]
+    max_iter: 2
+    
+  summary_agent:
+    role: "Senior Financial Market Analyst" 
+    goal: "Create concise, actionable financial market summaries under 500 words efficiently."
+    backstory: >
+      You are a seasoned financial analyst with 15+ years of experience
+      in equity research and market analysis. You excel at distilling complex financial
+      information into clear, actionable insights quickly and efficiently. You understand
+      the importance of working within API constraints while maintaining quality.
+    tools: []
+    max_iter: 1
+    
+  formatting_agent:
+    role: "Financial Content Formatter and Visualization Expert"
+    goal: "Format financial summaries with relevant visual elements efficiently."
+    backstory: >
+      You are a skilled financial content specialist who combines
+      analytical expertise with visual design knowledge. You work efficiently to
+      create well-formatted content with appropriate visual elements while being
+      mindful of resource constraints.
+    tools: ["financial_image_finder"]
+    max_iter: 1
+    
+  translation_agent:
+    role: "Multilingual Financial Translation Specialist"
+    goal: "Translate financial content accurately while preserving technical terminology."
+    backstory: >
+      You are a professional financial translator with expertise in
+      Arabic, Hindi, and Hebrew. You work efficiently to provide accurate translations
+      while being mindful of API rate limits. You preserve all financial terms,
+      numbers, and formatting in your translations.
+    tools: ["financial_translator"]
+    max_iter: 1
+    
+  send_agent:
+    role: "Financial Content Distribution Manager"
+    goal: "Efficiently distribute financial summaries to Telegram channels."
+    backstory: >
+      You are a digital content distribution expert specializing in
+      financial communications. You ensure timely, accurate dissemination of information
+      through Telegram while working efficiently within system constraints.
+    tools: ["telegram_sender"]
+    max_iter: 1
+
+
+# LLM CONFIGURATION 
+
+llm_config:
+  model: "gemini/gemini-2.5-flash"
+  temperature: 0.3
+  max_tokens: 2048
+  request_timeout: 60
+  api_key_env: "GOOGLE_API_KEY"
+
+# TOOLS CONFIGURATION
+
+tools:
+  tavily_financial_search:
+    max_results: 10
+    search_depth: "advanced"
+    timeout_seconds: 30
+    
+  serper_financial_search:
+    num_results: 10
+    time_range: "qdr:h1"  
+    country: "us"
+    language: "en"
+    timeout_seconds: 25
+    
+  financial_image_finder:
+    max_images: 2
+    image_types: ["stock_chart", "market_graph", "financial_visualization"]
+    timeout_seconds: 20
+    
+  financial_translator:
+    preserve_formatting: true
+    financial_terminology_mode: true
+    quality_check: true
+    timeout_seconds: 30
+    
+  telegram_sender:
     parse_mode: "Markdown"
     disable_web_page_preview: false
-    disable_notification: false
-    protect_content: false
-  
-  # Message Formatting Options
-  formatting:
-    include_emojis: true
-    include_timestamp: true
-    include_branding: true
-    include_language_header: true
-    include_word_count: false
-    include_generation_stats: true
-  
-  # Language Identification Emojis
-  language_emojis:
-    english: "🇺🇸"
-    arabic: "🇸🇦"
-    hindi: "🇮🇳"
-    hebrew: "🇮🇱"
-  
-  # Professional Message Template
-  message_template: |
-    {emoji} **CROWDWISDOMTRADING DAILY FINANCIAL SUMMARY**
-    🤖 **AI-Generated Market Analysis**
-    🕐 **Generated: {timestamp}**
-    🌐 **Language: {language}**
-    📊 **Market: US Equities Post-Close**
-    {'='*50}
-    
-    {content}
-    
-    {'='*50}
-    📈 **CrowdWisdomTrading AI Agent**
-    🔄 **Next Update: Tomorrow 01:30 IST**
-    ⚠️  **Disclaimer: For informational purposes only**
-  
-  # Error Handling for Telegram Delivery
-  error_handling:
-    max_retries: 3
-    retry_delay_seconds: 5
-    fallback_actions:
-      - save_to_file
-      - log_failure
-      - email_notification  # if configured
-    message_length_limit: 4096  # Telegram limit
-    auto_split_long_messages: true
+    rate_limit_compliance: true
+    timeout_seconds: 30
 
-# ========================================
-# TOOLS AND API CONFIGURATION
-# ========================================
-tools_config:
-  # Search Tools Configuration
-  search_tools:
-    tavily:
-      name: "tavily_financial_search"
-      max_results: 10
-      search_depth: "advanced"
-      include_answer: true
-      include_raw_content: false
-      domains_focus: "financial_news"
-      timeout_seconds: 30
-      retry_attempts: 2
-      
-    serper:
-      name: "serper_financial_search"
-      num_results: 10
-      time_filter: "qdr:h1"  # Last 1 hour
-      country: "us"
-      search_type: "news"
-      language: "en"
-      timeout_seconds: 25
-      retry_attempts: 2
+# ERROR HANDLING & RECOVERY
+error_handling:
   
-  # Image Finding Tools
-  image_tools:
-    financial_image_finder:
-      max_images: 2
-      image_types:
-        - "stock_chart"
-        - "market_graph"
-        - "financial_visualization"
-        - "sector_performance"
-      verify_accessibility: true
-      timeout_seconds: 20
-      preferred_sources:
-        - "yahoo.com/finance"
-        - "tradingview.com"
-        - "finviz.com"
-        - "marketwatch.com"
-      fallback_enabled: true
-  
-  # Translation Tools
-  translation_tools:
-    financial_translator:
-      preserve_formatting: true
-      financial_terminology_mode: true
-      quality_validation: true
-      fallback_enabled: true
-      timeout_seconds: 30
-      batch_processing: false
-  
-  # Delivery Tools
-  delivery_tools:
-    telegram_sender:
-      retry_attempts: 3
-      timeout_seconds: 30
-      rate_limit_compliance: true
-      message_threading: false
-      delivery_confirmation: true
-
-# ========================================
-# MONITORING AND PERFORMANCE
-# ========================================
-monitoring:
-  # Performance Tracking
-  enable_performance_tracking: true
-  enable_error_tracking: true
-  enable_api_monitoring: true
-  enable_memory_monitoring: true
-  
-  # Logging Configuration
-  log_config:
-    level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    format: "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
-    file_rotation: true
-    max_file_size_mb: 10
-    backup_count: 5
-    log_to_console: true
-    log_to_file: true
-    
-  # Metrics Collection
-  metrics_collection:
-    execution_time: true
-    memory_usage: true
-    api_response_times: true
-    success_failure_rates: true
-    content_quality_scores: true
-    translation_accuracy: true
-    delivery_confirmation_rates: true
-  
-  # Performance Alerts
-  alerts:
-    max_execution_time_seconds: 600  # 10 minutes
-    error_rate_threshold: 0.1  # 10%
-    success_rate_threshold: 0.9  # 90%
-    memory_usage_threshold_mb: 512
-    api_timeout_threshold_seconds: 60
-
-# ========================================
-# QUALITY ASSURANCE AND VALIDATION
-# ========================================
-quality_assurance:
-  # Content Validation Rules
-  content_validation:
-    grammar_check: true
-    financial_accuracy_check: true
-    format_consistency_check: true
-    length_validation: true
-    professional_tone_check: true
-    
-  # Translation Quality Checks
-  translation_validation:
-    cross_reference_validation: true
-    terminology_consistency: true
-    cultural_appropriateness: true
-    technical_accuracy: true
-    formatting_preservation: true
-  
-  # Delivery Quality Assurance
-  delivery_validation:
-    message_formatting_check: true
-    character_encoding_validation: true
-    link_accessibility_check: true
-    delivery_confirmation_required: true
-    mobile_readability_check: true
-  
-  # Quality Thresholds
-  quality_thresholds:
-    minimum_content_score: 0.8
-    maximum_translation_variance: 0.3
-    required_delivery_success_rate: 0.95
-    minimum_professional_score: 0.85
-
-# ========================================
-# ERROR RECOVERY AND FALLBACKS
-# ========================================
-error_recovery:
-  enable_automatic_recovery: true
-  max_recovery_attempts: 5
-  recovery_timeout_seconds: 300
-  
-  # Recovery Strategies by Error Type
-  recovery_strategies:
+  phase_failures:
     search_failure:
-      - try_alternative_search_tool
-      - extend_search_time_range
-      - use_cached_market_data
-      - reduce_search_scope
-      - manual_intervention_alert
-    
-    summary_creation_failure:
-      - retry_with_different_model
-      - use_simplified_template
-      - reduce_content_complexity
-      - fallback_to_basic_summary
-    
+      - "Return error message with 'Error' prefix"
+      - "Stop workflow execution"
+      
+    summary_failure:
+      - "Return error message with 'Error' prefix"
+      - "Stop workflow execution"
+      
+    formatting_failure:
+      - "Return error message with 'Error' prefix"
+      - "Stop workflow execution"
+      
     translation_failure:
-      - try_alternative_translation_service
-      - use_simplified_language_model
-      - provide_english_only_with_explanation
-      - skip_problematic_language_temporarily
-    
-    image_finding_failure:
-      - use_generic_market_charts
-      - skip_image_integration
-      - use_text_based_visualizations
-      - continue_without_images
-    
-    telegram_delivery_failure:
-      - retry_with_exponential_backoff
-      - split_long_messages
-      - save_content_locally
-      - send_error_notification
-      - use_alternative_messaging_platform
-    
-    agent_failure:
-      - restart_failed_agent
-      - redistribute_tasks_to_other_agents
-      - use_backup_agent_configuration
-      - escalate_to_manual_intervention
-  
-  # Escalation Rules
-  escalation_rules:
-    critical_failure_threshold: 3
-    escalation_delay_minutes: 5
-    escalation_contacts:
-      - "admin@crowdwisdomtrading.com"
-    escalation_methods:
-      - "email"
-      - "telegram_admin"
-    include_logs: true
-    include_system_state: true
+      - "Continue with remaining languages"
+      - "Mark failed translations"
+      - "Skip failed translations in sending phase"
+      
+    sending_failure:
+      - "Continue with remaining languages"
+      - "Log send results per language"
+      - "Report completion status"
 
-# ========================================
-# SECURITY AND COMPLIANCE
-# ========================================
-security:
-  # API Security
-  api_key_validation: true
-  secure_logging: true  # Never log API keys
-  rate_limit_compliance: true
-  api_timeout_enforcement: true
-  
-  # Data Handling Security
-  data_handling:
-    encrypt_sensitive_data: false  # Not needed for public market data
-    sanitize_outputs: true
-    validate_input_sources: true
-    prevent_data_leakage: true
-  
-  # Compliance Settings
-  compliance:
-    gdpr_compliance: true
-    financial_disclaimer_required: true
-    data_retention_policy_days: 30
-    audit_trail_enabled: true
+
+# RATE LIMITING 
+
+rate_limiting:
+  gemini:
+    enabled: true
+    rpm_limit: 60
+    apply_to_phases: ["summary", "formatting"]
     
-  # Content Guidelines
-  content_guidelines:
-    prohibited_content:
-      - "insider_trading_information"
-      - "market_manipulation_advice"
-      - "unauthorized_investment_recommendations"
-      - "personal_financial_advice"
+  search_apis:
+    enabled: true  
+    rpm_limit: 100
     
-    required_disclaimers:
-      - "This analysis is for informational purposes only"
-      - "Not personalized financial advice"
-      - "Consult financial professionals before investing"
-      - "Past performance does not guarantee future results"
+  telegram:
+    enabled: true
+    rpm_limit: 30
+    message_delay: 2
 
-# ========================================
-# PERFORMANCE OPTIMIZATION
-# ========================================
-performance:
-  # Caching Configuration
-  caching:
-    enable_result_caching: true
-    cache_duration_hours: 1
-    cache_size_limit_mb: 100
-    cache_cleanup_interval_seconds: 3600
-    cache_hit_logging: true
-  
-  # Parallel Processing
-  parallel_processing:
-    enable_for_translations: true
-    enable_for_image_search: false
-    max_concurrent_tasks: 3
-    task_timeout_seconds: 120
-    thread_pool_size: 5
-  
-  # Resource Management
-  resource_management:
-    max_memory_usage_mb: 512
-    cpu_usage_limit_percent: 80
-    disk_usage_limit_mb: 1000
-    network_timeout_seconds: 60
-  
-  # Optimization Strategies
-  optimization_strategies:
-    - "reuse_search_results_across_agents"
-    - "parallel_translation_processing"
-    - "batch_telegram_delivery"
-    - "efficient_image_processing"
-    - "smart_api_rate_limiting"
-    - "memory_efficient_data_handling"
+# OUTPUT CONFIGURATION
 
-# ========================================
-# INTEGRATION AND API SETTINGS
-# ========================================
-integrations:
-  # External API Rate Limiting
-  external_apis:
-    rate_limiting:
-      openai_rpm: 60
-      tavily_rpm: 100
-      serper_rpm: 100
-      telegram_rpm: 30
-      groq_rpm: 60  # If used
+output:
+  execution_results:
+    store_intermediate: true
+    phases_tracked:
+      - "search"
+      - "summary" 
+      - "formatted_summary"
+      - "translations"
+      - "send_results"
+      
+  success_response:
+    include_status: true
+    include_results: true
+    include_execution_time: true
+    include_summary:
+      - "english_summary_excerpt"
+      - "translations_completed"
+      - "sends_completed"
+      
+  failure_response:
+    include_status: true
+    include_error_message: true
+    include_failed_phase: true
+
+
+# LOGGING & MONITORING
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_phases: true
+  log_retry_attempts: true
+  log_rate_limiting: true
+  log_to_console: true
+
+
+# FINANCIAL DATA REQUIREMENTS
+
+financial_requirements:
+  market_focus: "US"
+  news_timeframe: "past 2 hours"
+  summary_max_words: 500
+  
+  required_sources:
+    - "bloomberg.com"
+    - "reuters.com" 
+    - "cnbc.com"
+    - "marketwatch.com"
     
-    # API Timeout Settings
-    timeout_settings:
-      search_timeout_seconds: 30
-      translation_timeout_seconds: 25
-      delivery_timeout_seconds: 20
-      image_search_timeout_seconds: 15
-    
-    # Retry Policies
-    retry_policies:
-      enable_exponential_backoff: true
-      max_retries: 3
-      initial_delay_seconds: 1
-      max_delay_seconds: 60
-      retry_on_timeout: true
-      retry_on_rate_limit: true
-  
-  # Data Persistence
-  data_persistence:
-    enable_database: false  # Using file storage for simplicity
-    enable_file_storage: true
-    enable_backup: true
-    retention_policy_days: 30
-    compression_enabled: false
-  
-  # External Service Integrations
-  external_services:
-    email_notifications:
-      enabled: false
-      smtp_server: null
-      smtp_port: 587
-    slack_integration:
-      enabled: false
-      webhook_url: null
-    discord_integration:
-      enabled: false
-      webhook_url: null
+  preserve_in_translations:
+    - "stock_symbols"  
+    - "numbers"
+    - "percentages" 
+    - "currency_values"
+    - "markdown_formatting"
 
-# ========================================
-# DEVELOPMENT AND TESTING
-# ========================================
-development:
-  # Test Mode Configuration
-  test_mode:
-    enabled: false
-    use_sample_data: false
-    mock_api_responses: false
-    skip_telegram_delivery: false
-    use_test_telegram_channel: false
-  
-  # Debug Settings
-  debug_settings:
-    verbose_output: true
-    save_intermediate_steps: true
-    detailed_error_messages: true
-    api_call_logging: true
-    performance_profiling: false
-  
-  # Validation Settings
-  validation:
-    strict_mode: true
-    validate_outputs: true
-    check_formatting: true
-    verify_translations: true
-    test_api_connections: true
+# TELEGRAM DELIVERY
+telegram:
+  delivery_order: ["english", "arabic", "hindi", "hebrew"]
+  language_settings:
+    arabic:
+      language_param: "arabic"
+    hindi:
+      language_param: "hindi"
+    hebrew:
+      language_param: "hebrew"
+    english:
+      language_param: "english"
 
-# ========================================
-# SCHEDULING AND AUTOMATION
-# ========================================
-scheduling:
-  # Automatic Scheduling
-  enabled: false  # Manual execution for assessment
-  cron_expression: "30 1 * * 1-5"  # 1:30 AM IST, Monday-Friday
-  timezone: "Asia/Kolkata"
-  
-  # Retry Configuration
-  auto_retry_failures: true
-  max_retry_attempts: 3
-  retry_delay_minutes: 15
-  
-  # Pre-execution Checks
-  pre_execution_checks:
-    - validate_all_api_keys
-    - check_market_status
-    - verify_telegram_connection
-    - test_search_tools
-    - validate_translation_service
-    - check_system_resources
-  
-  # Post-execution Actions
-  post_execution_actions:
-    - save_execution_results
-    - cleanup_temporary_files
-    - send_completion_notification
-    - update_performance_metrics
-    - backup_important_data
-    - generate_execution_report
-
-# ========================================
-# BACKUP AND DISASTER RECOVERY
-# ========================================
-backup:
-  # Automatic Backup Configuration
-  automatic_backup: true
-  backup_frequency: "daily"
-  backup_retention_days: 30
-  backup_location: "backups/"
-  compression_enabled: true
-  
-  # Components to Backup
-  backup_components:
-    - configuration_files
-    - execution_logs
-    - generated_summaries
-    - performance_metrics
-    - error_reports
-    - api_usage_statistics
-  
-  # Disaster Recovery
-  disaster_recovery:
-    enable_failover: true
-    backup_telegram_bot_token: null
-    alternative_api_keys: false
-    recovery_procedures: |
-      DISASTER RECOVERY PROCEDURES:
-      1. Verify API key validity and quotas
-      2. Check internet connectivity and DNS
-      3. Test individual tool functionality
-      4. Review recent error logs for patterns
-      5. Restart services in dependency order
-      6. Validate system resources availability
-      7. Contact technical support if issues persist
-      8. Implement temporary workarounds if needed
-
-# ========================================
-# ANALYTICS AND REPORTING
-# ========================================
-analytics:
-  # Usage Analytics
-  enable_usage_analytics: true
-  enable_performance_analytics: true
-  enable_error_analytics: true
-  enable_content_quality_analytics: true
-  
-  # Reporting Configuration
-  reporting:
-    generate_daily_summary: true
-    generate_weekly_summary: false
-    generate_monthly_summary: false
-    
-    # Metrics to Track
-    metrics_to_track:
-      - execution_success_rate
-      - average_execution_time
-      - api_usage_statistics
-      - error_frequency_analysis
-      - content_quality_scores
-      - translation_accuracy_rates
-      - telegram_delivery_success_rates
-      - user_engagement_metrics
-      - system_resource_utilization
-      - cost_optimization_metrics
-  
-  # Data Export
-  data_export:
-    export_formats:
-      - "json"
-      - "csv"
-      - "yaml"
-    retention_days: 90
-    auto_cleanup_enabled: true
-    include_sensitive_data: false
-
-# ========================================
-# FINAL CONFIGURATION METADATA
-# ========================================
+# METADATA
 metadata:
   config_version: "1.0.0"
-  schema_version: "crewai-1.0"
+  aligned_with: "FinancialMarketCrew Python implementation"
+  workflow_type: "sequential_5_phase"
   created_date: "2024-01-15"
-  last_modified_date: "2024-01-15"
-  environment: "production"
-  
-  # Validation Status
-  validation_status:
-    syntax_valid: true
-    schema_compliant: true
-    security_reviewed: true
-    performance_optimized: true
-    assessment_ready: true
-  
-  # Dependencies and Requirements
-  dependencies:
-    crewai_version: ">=0.28.0"
-    python_version: ">=3.8"
-    required_packages:
-      - "litellm>=1.35.0"
-      - "requests>=2.31.0"
-      - "pyyaml>=6.0"
-      - "python-telegram-bot>=20.7"
-      - "tavily-python>=0.3.0"
-      - "python-dotenv>=1.0.0"
-  
-  # Configuration Notes
-  notes: |
-    This configuration file is designed for the CrowdWisdomTrading AI Agent
-    assessment project. It includes comprehensive settings for:
-    - Multi-agent financial analysis
-    - Multi-language content generation
-    - Professional Telegram delivery
-    - Comprehensive error handling and recovery
-    - Production-ready monitoring and logging
-    
-    For assessment purposes, ensure all required API keys are configured
-    in the .env file before execution.
+

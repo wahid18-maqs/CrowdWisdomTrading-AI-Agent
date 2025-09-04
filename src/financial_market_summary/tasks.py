@@ -1,4 +1,3 @@
-# tasks.py
 from crewai import Task
 from datetime import datetime
 
@@ -7,7 +6,6 @@ class FinancialTasks:
     Factory class for creating all financial analysis and distribution tasks.
     It encapsulates the logic for how tasks are defined and chained together.
     """
-    
     def __init__(self, agents_factory):
         """
         Initializes the task factory with an instance of the agent factory
@@ -22,7 +20,7 @@ class FinancialTasks:
         responsible, and any prerequisite tasks (context).
         """
         
-        # ⚙️ Task 1: Search for Financial News
+        #  Task 1: Search for Financial News
         search_task = Task(
             description="""Search for recent US financial news from the last 1-2 hours.
             
@@ -41,7 +39,7 @@ class FinancialTasks:
             agent=self.agents.search_agent()
         )
         
-        # ⚙️ Task 2: Create a Financial Summary
+        #  Task 2: Create a Financial Summary
         summary_task = Task(
             description="""Analyze the provided financial news data and create a concise,
             actionable financial market summary suitable for investors. The total length
@@ -62,7 +60,7 @@ class FinancialTasks:
             context=[search_task]  # This task depends on the output of search_task
         )
         
-        # ⚙️ Task 3: Format the Summary with Images
+        #  Task 3: Format the Summary with Images
         format_task = Task(
             description="""Take the financial summary and format it for publication.
             
@@ -77,7 +75,7 @@ class FinancialTasks:
             context=[summary_task]  # This task depends on the output of summary_task
         )
         
-        # ⚙️ Task 4: Translate to Arabic
+        #  Task 4: Translate to Arabic
         translate_arabic_task = Task(
             description="""Translate the formatted financial summary to Arabic.
             
@@ -92,7 +90,7 @@ class FinancialTasks:
             context=[format_task]  # Depends on the formatted English version
         )
         
-        # ⚙️ Task 5: Translate to Hindi
+        #  Task 5: Translate to Hindi
         translate_hindi_task = Task(
             description="""Translate the formatted financial summary to Hindi, following
             the same critical requirements: preserve financial terms, keep stock symbols
@@ -103,7 +101,7 @@ class FinancialTasks:
             context=[format_task]
         )
         
-        # ⚙️ Task 6: Translate to Hebrew
+        #  Task 6: Translate to Hebrew
         translate_hebrew_task = Task(
             description="""Translate the formatted financial summary to Hebrew, following
             the same critical requirements: preserve financial terms, keep stock symbols
@@ -114,7 +112,7 @@ class FinancialTasks:
             context=[format_task]
         )
         
-        # ⚙️ Task 7: Send All Summaries to Telegram
+        #  Task 7: Send All Summaries to Telegram
         send_task = Task(
             description="""Distribute the financial summaries to the designated Telegram channel.
             
@@ -133,7 +131,7 @@ class FinancialTasks:
             context=[format_task, translate_arabic_task, translate_hindi_task, translate_hebrew_task]
         )
         
-        # ✅ Return the full list of tasks
+        #  Return the full list of tasks
         return [
             search_task,
             summary_task,
@@ -143,3 +141,4 @@ class FinancialTasks:
             translate_hebrew_task,
             send_task
         ]
+    
