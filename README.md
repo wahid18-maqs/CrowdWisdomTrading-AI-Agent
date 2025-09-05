@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/f6e98a73-c86a-4082-bd58-1d834e2fef6b
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/wahid18-maqs/financial_market_summary.git
    cd financial-market-summary
    ```
 
