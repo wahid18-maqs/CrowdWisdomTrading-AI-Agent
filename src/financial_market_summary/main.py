@@ -1,275 +1,254 @@
 import os
-import sys
-import json
 import logging
-from datetime import datetime
+import time
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
+from typing import Dict, Any
 
-# Add src directory to Python path
-src_path = Path(__file__).parent
-sys.path.insert(0, str(src_path))
 
-# Import our crew implementation
-from .crew import FinancialMarketCrew
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_PATH = ROOT_DIR / ".env"
+load_dotenv(ENV_PATH)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-def setup_environment():
-    """Setup environment variables and validate configuration"""
-    # Load environment variables
-    load_dotenv()
+def check_env_keys() -> bool:
+    """
+    Checks for the presence of all required environment variables.
+    Provides detailed feedback on missing keys to help with configuration.
+    Returns:
+        True if all required keys are found, False otherwise.
+    """
+    required_keys = {
+        "GOOGLE_API_KEY": "Gemini API key for LLM operations",
+        "TAVILY_API_KEY": "Tavily API key for news search",
+        "TELEGRAM_BOT_TOKEN": "Telegram bot token for sending messages",
+        "TELEGRAM_CHAT_ID": "Telegram chat ID for the target channel",
+        "SERPER_API_KEY": "Serper API key for backup search"
+    }
     
-    # Required environment variables
-    required_vars = [
-        'GOOGLE_API_KEY',     # For Gemini LLM
-        'TAVILY_API_KEY',     # For news search
-        'TELEGRAM_BOT_TOKEN', # For message sending
-        'TELEGRAM_CHAT_ID'    # For target channel
-    ]
+    missing_keys = []
     
-    # Optional environment variables
-    optional_vars = [
-        'SERPER_API_KEY',     # Backup search API
-    ]
+    logger.info("Beginning check for required API keys...")
+    for key, description in required_keys.items(): 
+        value = os.getenv(key)
+        if not value:
+            missing_keys.append(f"  {key} ({description})")
     
-    missing_vars = []
-    present_vars = []
-    
-    # Check required variables
-    for var in required_vars:
-        if os.getenv(var):
-            present_vars.append(var)
-            # Mask the actual values in logs
-            masked_value = os.getenv(var)[:8] + "..." if len(os.getenv(var)) > 8 else "***"
-            print(f"✅ {var}: {masked_value}")
-        else:
-            missing_vars.append(var)
-            print(f"❌ {var}: Not found")
-    
-    # Check optional variables
-    for var in optional_vars:
-        if os.getenv(var):
-            masked_value = os.getenv(var)[:8] + "..." if len(os.getenv(var)) > 8 else "***"
-            print(f"🔶 {var}: {masked_value} (optional)")
-        else:
-            print(f"🔶 {var}: Not found (optional)")
-    
-    if missing_vars:
-        print(f"\n❌ Missing required environment variables: {missing_vars}")
-        print("\nPlease ensure all required API keys are set in your .env file:")
-        print("GOOGLE_API_KEY=your_gemini_api_key")
-        print("TAVILY_API_KEY=your_tavily_api_key")
-        print("TELEGRAM_BOT_TOKEN=your_bot_token")
-        print("TELEGRAM_CHAT_ID=your_chat_id")
+    if missing_keys:
+        logger.error("The following required API keys were not found:")
+        for key in missing_keys:
+            logger.error(key)
+        logger.error("Please add these to your .env file to proceed.")
         return False
     
-    print(f"\n✅ Environment setup complete. {len(present_vars)} required variables found.")
+    logger.info("All required API keys were found.")
     return True
 
-def save_execution_results(results, filename=None):
-    """Save execution results to JSON file"""
-    try:
-        # Create logs directory if it doesn't exist
-        logs_dir = Path("logs")
-        logs_dir.mkdir(exist_ok=True)
-        
-        # Generate filename if not provided
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"workflow_result_{timestamp}.json"
-        
-        filepath = logs_dir / filename
-        
-        # Save results with proper JSON formatting
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-        
-        print(f"📄 Execution results saved to: {filepath}")
-        return str(filepath)
-        
-    except Exception as e:
-        print(f"⚠️ Failed to save execution results: {str(e)}")
-        return None
-
-def print_execution_summary(results):
-    """Print a formatted summary of execution results"""
-    print("\n" + "="*60)
-    print("📊 EXECUTION SUMMARY")
-    print("="*60)
-    
-    # Basic execution info
-    print(f"🕒 Start Time: {results.get('execution_start', 'Unknown')}")
-    print(f"🕒 End Time: {results.get('execution_end', 'Unknown')}")
-    print(f"⏱️ Duration: {results.get('execution_duration_minutes', 0):.1f} minutes")
-    print(f"✅ Success: {results.get('success', False)}")
-    
-    if not results.get('success'):
-        print(f"❌ Error: {results.get('error', 'Unknown error')}")
-        return
-    
-    # API connection status
-    api_status = results.get('api_connections', {})
-    print(f"\n🔌 API CONNECTIONS:")
-    for api, status in api_status.items():
-        status_icon = "✅" if status else "❌"
-        print(f"   {status_icon} {api.title()}: {'Connected' if status else 'Failed'}")
-    
-    # Detailed results from execution
-    detailed = results.get('detailed_results', {})
-    
-    # Search results
-    search_results = detailed.get('search_results', {})
-    if search_results:
-        articles_count = len(search_results.get('articles', []))
-        print(f"\n📰 NEWS SEARCH:")
-        print(f"   📄 Articles Found: {articles_count}")
-        print(f"   🔗 URLs for Image Extraction: {len(search_results.get('article_urls', []))}")
-        
-        # Show top articles
-        articles = search_results.get('articles', [])[:3]
-        for i, article in enumerate(articles, 1):
-            print(f"   {i}. {article.get('title', 'Untitled')[:60]}...")
-    
-    # Image extraction results
-    images = detailed.get('extracted_images', [])
-    if images:
-        print(f"\n🖼️ IMAGE EXTRACTION:")
-        print(f"   📊 Charts/Graphs Found: {len(images)}")
-        for i, img in enumerate(images, 1):
-            source = img.get('source_domain', 'Unknown')
-            score = img.get('relevance_score', 0)
-            print(f"   {i}. Source: {source} (Relevance: {score})")
-    
-    # Translation results
-    translations = detailed.get('translations', {})
-    if translations:
-        print(f"\n🌐 TRANSLATIONS:")
-        print(f"   📝 Languages: {len(translations)}")
-        for lang in translations.keys():
-            print(f"   ✅ {lang}")
-    
-    # Telegram distribution results
-    telegram_results = detailed.get('telegram_distribution', {})
-    if telegram_results:
-        print(f"\n📱 TELEGRAM DISTRIBUTION:")
-        print(f"   📤 Overall Success: {telegram_results.get('success', False)}")
-        
-        # Per-language results
-        lang_results = telegram_results.get('results', {})
-        for lang, result in lang_results.items():
-            if lang != 'images':  # Skip images key
-                success_rate = result.get('success_rate', 0) * 100
-                print(f"   {lang}: {success_rate:.0f}% success rate")
-    
-    print("\n" + "="*60)
-
-def main():
-    """Main execution function"""
-    print("🚀 Financial Market Summary Bot - Starting Execution")
-    print(f"📅 Execution Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*60)
-    
-    # Step 1: Environment Setup
-    print("\n1️⃣ ENVIRONMENT SETUP")
-    if not setup_environment():
-        print("❌ Environment setup failed. Exiting.")
-        sys.exit(1)
-    
-    # Step 2: Initialize Crew
-    print("\n2️⃣ INITIALIZING WORKFLOW")
-    try:
-        crew = FinancialMarketCrew()
-        print("✅ Crew initialized successfully")
-    except Exception as e:
-        print(f"❌ Failed to initialize crew: {str(e)}")
-        sys.exit(1)
-    
-    # Step 3: Execute Workflow
-    print("\n3️⃣ EXECUTING WORKFLOW")
-    print("This may take several minutes depending on API tier...")
-    print("⏳ Expected time: 3-8 minutes")
-    
-    try:
-        results = crew.execute_workflow()
-        
-        # Step 4: Save and Display Results
-        print("\n4️⃣ PROCESSING RESULTS")
-        
-        # Save results to file
-        save_execution_results(results)
-        
-        # Print summary
-        print_execution_summary(results)
-        
-        # Final status
-        if results.get('success'):
-            print("\n🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
-            print("📱 Check your Telegram channels for the market summary.")
-            
-            # Show quick stats
-            summary = crew.get_execution_summary()
-            print(f"📊 Quick Stats:")
-            print(f"   • {summary.get('articles_found', 0)} articles analyzed")
-            print(f"   • {summary.get('images_extracted', 0)} charts/graphs included")
-            print(f"   • {summary.get('languages_translated', 0)} languages delivered")
-        else:
-            print("\n❌ WORKFLOW FAILED")
-            print("📋 Check the logs for detailed error information.")
-            print(f"Error: {results.get('error', 'Unknown error')}")
-            sys.exit(1)
-            
-    except KeyboardInterrupt:
-        print("\n\n⚠️ Execution interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ Unexpected error during execution: {str(e)}")
-        
-        # Try to save partial results
-        try:
-            partial_results = {
-                'success': False,
-                'error': str(e),
-                'execution_time': datetime.now().isoformat(),
-                'partial_data': crew.execution_results if hasattr(crew, 'execution_results') else {}
-            }
-            save_execution_results(partial_results, f"failed_execution_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-        except:
-            pass
-        
-        sys.exit(1)
-
-def test_mode():
-    """Run in test mode - just test API connections"""
-    print("🧪 TEST MODE - API Connection Testing")
-    print("="*50)
-    
-    if not setup_environment():
-        return
-    
-    try:
-        crew = FinancialMarketCrew()
-        connections = crew.test_api_connections()
-        
-        print("\n📊 CONNECTION TEST RESULTS:")
-        all_connected = True
-        for service, status in connections.items():
-            icon = "✅" if status else "❌"
-            print(f"{icon} {service.title()}: {'Connected' if status else 'Failed'}")
-            if not status:
-                all_connected = False
-        
-        if all_connected:
-            print("\n🎉 All APIs connected successfully!")
-            print("Ready to run full workflow.")
-        else:
-            print("\n⚠️ Some API connections failed.")
-            print("Please check your API keys and network connection.")
-            
-    except Exception as e:
-        print(f"❌ Test failed: {str(e)}")
-
-if __name__ == "__main__":
-    # Check for test mode
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test_mode()
+def check_api_quotas() -> str:
+    """
+    Provides a heuristic check for the Gemini API quota tier.
+    Based on a simple key length check, this function logs recommendations
+    to manage potential rate limiting for free-tier users.
+    Returns:
+        A string indicating the detected tier ('free_tier' or 'paid_tier').
+    """
+    logger.info("Checking API quotas and providing recommendations...")
+    google_key = os.getenv('GOOGLE_API_KEY', '')
+    if len(google_key) < 50:
+        logger.warning("Detected a likely free tier for Gemini API. The workflow will be more conservative with API calls to prevent rate limiting.")
+        return 'free_tier'
     else:
-        main()
+        logger.info("Detected a paid tier for Gemini API. Using standard rate limiting settings.")
+        return 'paid_tier'
+
+def run_financial_summary() -> Dict[str, Any]:
+    """
+    Orchestrates and runs the complete financial summary workflow.
+
+    This function performs all necessary environment checks before
+    initializing and executing the CrewAI workflow. It also handles
+    logging of execution status, duration, and any errors.
+
+    Returns:
+        A dictionary containing the final status and results of the workflow.
+    """
+    if not check_env_keys():
+        return {"status": "failed", "error": "Missing required API keys"}
+    
+    quota_tier = check_api_quotas()
+    
+    try:
+        from .crew import FinancialMarketCrew
+        
+        logger.info("--- Starting Financial Market Summary Workflow ---")
+        logger.info(f"Execution started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"API Tier: {quota_tier}")
+        
+        # Determine expected execution time based on the quota tier
+        if quota_tier == 'free_tier':
+            logger.info("Using conservative rate limiting for the free tier. Expected execution time: 8-12 minutes.")
+        else:
+            logger.info("Using standard rate limiting for the paid tier. Expected execution time: 3-5 minutes.")
+        
+        # Initialize and run the crew
+        crew_manager = FinancialMarketCrew()
+        start_time = time.time()
+        result = crew_manager.run_complete_workflow()
+        end_time = time.time()
+        execution_duration = end_time - start_time
+        logger.info(f"Total execution time: {execution_duration:.1f} seconds")
+        logger.info(f"Execution completed with status: {result.get('status', 'unknown')}")
+        
+        if result.get('status') == 'success':
+            logger.info("Financial summary generated and sent successfully!")
+            
+            summary = result.get('summary', {})
+            logger.info(f"Summary of Accomplishments: {summary.get('translations_completed', 0)} translations, {summary.get('sends_completed', 0)} deliveries.")
+        else:
+            logger.error(f"Execution failed: {result.get('error', 'Unknown error')}")
+            
+            # Provide troubleshooting tips for common failures
+            error_msg = result.get('error', '')
+            if '429' in error_msg or 'quota' in error_msg.lower():
+                logger.info("Troubleshooting a rate limit error:")
+                logger.info(" - Try running the workflow again in 1-2 minutes.")
+                logger.info(" - Consider upgrading to a paid Gemini API tier for higher limits.")
+                logger.info(" - Check your API quotas at https://ai.google.dev/")
+        
+        return result
+        
+    except ImportError as e:
+        error_msg = f"Import error - please ensure all dependencies are installed: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {"status": "failed", "error": error_msg}
+        
+    except Exception as e:
+        error_msg = f"A fatal error occurred during execution: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {"status": "failed", "error": error_msg}
+
+# --- API Connection Test Function ---
+def test_api_connections() -> Dict[str, str]:
+    """
+    Tests connections to all required APIs before starting the main workflow.
+
+    This function provides a pre-flight check to ensure the application
+    can communicate with external services.
+
+    Returns:
+        A dictionary with the connection status of each API.
+    """
+    logger.info("Testing API connections...")
+    
+    test_results = {}
+    
+    # Test Gemini API connection
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        gemini_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            temperature=0.3,
+            google_api_key=os.getenv("GOOGLE_API_KEY")
+        )
+        gemini_llm.invoke([{"role": "user", "content": "Test"}])
+        test_results['gemini'] = "Connected successfully"
+        logger.info("Gemini API: Connected successfully.")
+    except Exception as e:
+        test_results['gemini'] = f"Failed: {str(e)}"
+        logger.error(f"Gemini API: Connection failed with error: {str(e)}")
+    
+    # Test Telegram API connection
+    try:
+        import requests
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if bot_token:
+            url = f"https://api.telegram.org/bot{bot_token}/getMe"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                test_results['telegram'] = "Connected successfully"
+                logger.info("Telegram API: Connected successfully.")
+            else:
+                test_results['telegram'] = f"HTTP {response.status_code}"
+                logger.error(f"Telegram API: Connection failed with HTTP status code {response.status_code}.")
+        else:
+            test_results['telegram'] = "No token"
+            logger.error("Telegram API: No token provided.")
+    except Exception as e:
+        test_results['telegram'] = f"Failed: {str(e)}"
+        logger.error(f"Telegram API: Connection failed with error: {str(e)}")
+    
+    # Test Tavily API connection
+    try:
+        import requests
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        if tavily_key:
+            url = "https://api.tavily.com/search"
+            payload = {
+                "api_key": tavily_key,
+                "query": "test",
+                "max_results": 1
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code == 200:
+                test_results['tavily'] = "Connected successfully"
+                logger.info("Tavily API: Connected successfully.")
+            else:
+                test_results['tavily'] = f"HTTP {response.status_code}"
+                logger.error(f"Tavily API: Connection failed with HTTP status code {response.status_code}.")
+        else:
+            test_results['tavily'] = "No key"
+            logger.error("Tavily API: No key provided.")
+    except Exception as e:
+        test_results['tavily'] = f"Failed: {str(e)}"
+        logger.error(f"Tavily API: Connection failed with error: {str(e)}")
+    
+    return test_results
+
+# Main Entry Point 
+if __name__ == "__main__":
+    logger.info("--- Financial Market Summary Bot ---")
+    
+    # Perform pre-flight API connection tests
+    api_status = test_api_connections()
+    
+    successful_apis = len([k for k, v in api_status.items() if "Connected" in v])
+    total_apis = len(api_status)
+    
+    logger.info(f"API Status: {successful_apis}/{total_apis} APIs are connected and ready to use.")
+    
+    # Check if minimum APIs are available for the workflow to run
+    if successful_apis >= 2:
+        logger.info("Minimum APIs are available. Proceeding with the workflow...")
+        final_result = run_financial_summary()
+        logger.info("--- WORKFLOW FINAL RESULT ---")
+        logger.info(final_result)
+    else:
+        logger.error("Insufficient API connections. The workflow will be aborted.")
+        logger.info("Please check your API keys and the connection status logs above.")
+        final_result = {"status": "failed", "error": "Insufficient API connections"}
+    
+    # Saving the final result to a log file for later review
+    try:
+        output_dir = Path("logs")
+        output_dir.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_file = output_dir / f"workflow_result_{timestamp}.json"
+        
+        import json
+        with open(result_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                'api_status': api_status,
+                'workflow_result': final_result,
+                'timestamp': datetime.now().isoformat()
+            }, f, indent=2, default=str)
+        
+        logger.info(f"Final results saved to: {result_file}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to save results to a file due to an error: {e}")

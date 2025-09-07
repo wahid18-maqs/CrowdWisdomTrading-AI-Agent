@@ -1,298 +1,562 @@
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+import json
 import logging
-from typing import List, Dict, Optional
-import time
 import os
-from PIL import Image
-import io
+import re
+import time
+from typing import Any, Dict, List, Type
+from urllib.parse import urljoin, urlparse
+import requests
+from crewai.tools import BaseTool
+from pydantic import BaseModel, Field
 
-class ArticleImageExtractor:
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        })
-        
-        # Keywords that indicate financial charts/graphs
-        self.financial_image_keywords = [
-            'chart', 'graph', 'data', 'market', 'stock', 'trading', 'financial',
-            'analysis', 'performance', 'earnings', 'revenue', 'profit', 'growth',
-            'trend', 'volatility', 'index', 'sector', 'portfolio', 'investment',
-            'economic', 'gdp', 'inflation', 'yield', 'price', 'volume'
-        ]
-        
-        # Image extensions to accept
-        self.valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'}
-        
-        # Max image size (5MB for Telegram)
-        self.max_image_size = 5 * 1024 * 1024
-        
-    def extract_images_from_articles(self, article_urls: List[str]) -> List[Dict]:
+logger = logging.getLogger(__name__)
+
+# --- Input and Tool Definition ---
+class ImageFinderInput(BaseModel):
+    """Input schema for the financial image finder tool."""
+
+    search_context: str = Field(
+        ..., description="The context or content to find relevant financial images for."
+    )
+    max_images: int = Field(
+        default=2, description="The maximum number of images to find."
+    )
+    image_types: List[str] = Field(
+        default=["chart", "graph", "financial"],
+        description="The types of images to search for.",
+    )
+
+
+class ImageFinder(BaseTool):
+    """
+    Finds real, working URLs for financial charts, graphs, and visualizations
+    based on news content or a given context.
+    """
+
+    name: str = "financial_image_finder"
+    description: str = (
+        "Find relevant financial charts, graphs, and images based on news content. "
+        "Returns real, working URLs for stock charts, market graphs, and financial visualizations."
+    )
+    args_schema: Type[BaseModel] = ImageFinderInput
+
+    def _run(
+        self,
+        search_context: str,
+        max_images: int = 2,
+        image_types: List[str] = None,
+    ) -> str:
         """
-        Extract relevant financial images from a list of article URLs
-        
-        Args:
-            article_urls: List of news article URLs to scrape
-            
-        Returns:
-            List of dictionaries containing image data and metadata
+        Executes the image search process by calling multiple internal methods.
         """
-        all_images = []
-        
-        for url in article_urls:
-            try:
-                logging.info(f"Extracting images from: {url}")
-                images = self._extract_images_from_single_article(url)
-                all_images.extend(images)
-                
-                # Add delay between requests to be respectful
-                time.sleep(1)
-                
-            except Exception as e:
-                logging.warning(f"Failed to extract images from {url}: {str(e)}")
-                continue
-        
-        # Filter and rank images
-        relevant_images = self._filter_and_rank_images(all_images)
-        
-        # Validate and download top images
-        validated_images = self._validate_images(relevant_images[:5])  # Top 5 candidates
-        
-        return validated_images[:2]  # Return top 2 images
-    
-    def _extract_images_from_single_article(self, url: str) -> List[Dict]:
-        """Extract images from a single article URL"""
         try:
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
+            if image_types is None:
+                image_types = ["chart", "graph", "financial"]
+
+            logger.info(f"Searching for {max_images} financial images.")
+
+            financial_terms = self._extract_financial_terms(search_context)
+            logger.info(f"Extracted terms: {financial_terms}")
+
             images = []
-            
-            # Find all img tags
-            img_tags = soup.find_all('img')
-            
-            for img in img_tags:
-                img_data = self._process_img_tag(img, url, soup)
-                if img_data:
-                    images.append(img_data)
-            
-            # Also check for figure tags which often contain financial charts
-            figure_tags = soup.find_all('figure')
-            for figure in figure_tags:
-                img = figure.find('img')
-                if img:
-                    img_data = self._process_img_tag(img, url, soup, figure)
-                    if img_data:
-                        images.append(img_data)
-            
-            return images
-            
+
+            # Prioritize real stock charts if symbols are found
+            if financial_terms["stocks"]:
+                stock_images = self._find_real_stock_charts(financial_terms["stocks"])
+                images.extend(stock_images)
+
+            # Add market index charts
+            if len(images) < max_images:
+                index_images = self._find_market_index_charts()
+                images.extend(index_images)
+
+            # Search for more images using the Serper API as a fallback
+            if len(images) < max_images and os.getenv("SERPER_API_KEY"):
+                search_images = self._search_real_financial_images(
+                    financial_terms, max_images - len(images)
+                )
+                images.extend(search_images)
+
+            # Fallback to general, real-time charts if needed
+            if len(images) < max_images:
+                realtime_images = self._get_realtime_financial_charts(
+                    max_images - len(images)
+                )
+                images.extend(realtime_images)
+
+            # Verify all found images for accessibility and filter out broken links
+            verified_images = self._verify_and_filter_images(images)
+
+            return self._format_image_results(verified_images)
+
         except Exception as e:
-            logging.error(f"Error scraping {url}: {str(e)}")
-            return []
-    
-    def _process_img_tag(self, img_tag, article_url: str, soup, parent_figure=None) -> Optional[Dict]:
-        """Process individual img tag and extract metadata"""
-        try:
-            # Get image URL
-            img_url = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-lazy-src')
-            if not img_url:
-                return None
-            
-            # Convert relative URLs to absolute
-            img_url = urljoin(article_url, img_url)
-            
-            # Check if URL has valid extension
-            parsed_url = urlparse(img_url)
-            path = parsed_url.path.lower()
-            if not any(path.endswith(ext) for ext in self.valid_extensions):
-                return None
-            
-            # Extract metadata
-            alt_text = img_tag.get('alt', '').lower()
-            title = img_tag.get('title', '').lower()
-            
-            # Get caption from parent figure if available
-            caption = ''
-            if parent_figure:
-                figcaption = parent_figure.find('figcaption')
-                if figcaption:
-                    caption = figcaption.get_text(strip=True)
-            
-            # Get surrounding context
-            context = self._get_surrounding_context(img_tag, soup)
-            
-            # Calculate relevance score
-            relevance_score = self._calculate_relevance_score(alt_text, title, caption, context)
-            
-            return {
-                'url': img_url,
-                'source_article': article_url,
-                'alt_text': alt_text,
-                'title': title,
-                'caption': caption,
-                'context': context,
-                'relevance_score': relevance_score,
-                'source_domain': urlparse(article_url).netloc
+            error_msg = f"An error occurred during image search: {e}"
+            logger.error(error_msg)
+            return error_msg
+
+    # --- Private Helper Methods ---
+    def _extract_financial_terms(self, content: str) -> Dict[str, List[str]]:
+        """
+        Extracts financial terms, such as stock symbols and keywords, from a given string.
+        """
+        financial_data = {
+            "stocks": [],
+            "indices": [],
+            "sectors": [],
+            "keywords": [],
+        }
+
+        # Regex to find potential stock symbols (2-5 uppercase letters)
+        stock_pattern = r"\b([A-Z]{2,5})\b"
+        potential_stocks = re.findall(stock_pattern, content)
+
+        # Common English words to exclude
+        exclude_words = {
+            "THE",
+            "AND",
+            "FOR",
+            "ARE",
+            "BUT",
+            "NOT",
+            "YOU",
+            "ALL",
+            "CAN",
+            "WAS",
+            "ONE",
+            "NEW",
+            "NOW",
+            "OLD",
+            "SEE",
+            "WHO",
+            "ITS",
+            "GET",
+            "MAY",
+            "USE",
+            "WAR",
+            "FAR",
+            "ANY",
+            "DAY",
+            "END",
+            "WAY",
+            "OUT",
+            "MAN",
+            "TOP",
+            "PUT",
+            "SET",
+            "RUN",
+            "GOT",
+            "LET",
+            "NEWS",
+            "SAID",
+            "ALSO",
+            "MADE",
+            "OVER",
+            "HERE",
+            "TIME",
+            "YEAR",
+            "WEEK",
+            "HOUR",
+            "PLUS",
+            "THAN",
+            "ONLY",
+            "JUST",
+            "LIKE",
+            "INTO",
+            "MORE",
+            "SOME",
+            "VERY",
+            "WHAT",
+            "FROM",
+            "THEY",
+            "KNOW",
+            "WANT",
+            "BEEN",
+            "GOOD",
+            "MUCH",
+            "COME",
+            "COULD",
+            "WOULD",
+            "MARKET",
+            "STOCK",
+            "PRICE",
+            "DOWN",
+            "CLOSE",
+            "OPEN",
+            "HIGH",
+            "TRADE",
+            "SELL",
+            "BUY",
+            "META",
+            "ORCL",
+        }
+
+        # Major stock symbols to prioritize, reducing false positives
+        major_stocks = {
+            "AAPL",
+            "MSFT",
+            "GOOGL",
+            "GOOG",
+            "AMZN",
+            "TSLA",
+            "NVDA",
+            "NFLX",
+            "AMD",
+            "INTC",
+            "CRM",
+            "ADBE",
+            "PYPL",
+            "UBER",
+            "SPOT",
+            "ZOOM",
+            "JPM",
+            "BAC",
+            "WFC",
+            "GS",
+            "MS",
+            "C",
+            "JNJ",
+            "PFE",
+            "UNH",
+            "CVS",
+        }
+
+        # Filter potential symbols
+        financial_data["stocks"] = list(
+            {
+                stock
+                for stock in potential_stocks
+                if (stock in major_stocks or (stock not in exclude_words))
             }
-            
-        except Exception as e:
-            logging.warning(f"Error processing img tag: {str(e)}")
-            return None
-    
-    def _get_surrounding_context(self, img_tag, soup) -> str:
-        """Get text context around the image"""
-        try:
-            # Get parent container
-            parent = img_tag.parent
-            context_text = ""
-            
-            # Try to get text from parent and siblings
-            if parent:
-                # Get previous sibling text
-                prev_sibling = img_tag.find_previous_sibling(['p', 'div', 'span'])
-                if prev_sibling:
-                    context_text += prev_sibling.get_text(strip=True)[:200]
-                
-                # Get next sibling text
-                next_sibling = img_tag.find_next_sibling(['p', 'div', 'span'])
-                if next_sibling:
-                    context_text += " " + next_sibling.get_text(strip=True)[:200]
-            
-            return context_text.lower()
-            
-        except Exception:
-            return ""
-    
-    def _calculate_relevance_score(self, alt_text: str, title: str, caption: str, context: str) -> float:
-        """Calculate how relevant an image is to financial content"""
-        score = 0.0
-        all_text = f"{alt_text} {title} {caption} {context}".lower()
-        
-        # Check for financial keywords
-        keyword_matches = sum(1 for keyword in self.financial_image_keywords if keyword in all_text)
-        score += keyword_matches * 2
-        
-        # Bonus for specific chart/graph indicators
-        if any(word in all_text for word in ['chart', 'graph', 'data visualization']):
-            score += 5
-        
-        # Penalty for common non-financial images
-        penalty_words = ['author', 'logo', 'advertisement', 'banner', 'profile', 'headshot']
-        penalties = sum(1 for word in penalty_words if word in all_text)
-        score -= penalties * 3
-        
-        # Bonus for having meaningful alt text or caption
-        if len(alt_text) > 10 or len(caption) > 10:
-            score += 2
-        
-        return max(0.0, score)  # Don't allow negative scores
-    
-    def _filter_and_rank_images(self, images: List[Dict]) -> List[Dict]:
-        """Filter and rank images by relevance"""
-        # Filter out images with very low relevance scores
-        filtered_images = [img for img in images if img['relevance_score'] > 1.0]
-        
-        # Sort by relevance score (descending)
-        filtered_images.sort(key=lambda x: x['relevance_score'], reverse=True)
-        
-        # Remove duplicates based on URL
-        seen_urls = set()
-        unique_images = []
-        for img in filtered_images:
-            if img['url'] not in seen_urls:
-                seen_urls.add(img['url'])
-                unique_images.append(img)
-        
-        return unique_images
-    
-    def _validate_images(self, images: List[Dict]) -> List[Dict]:
-        """Validate that images are accessible and suitable for Telegram"""
-        validated = []
-        
-        for img in images:
-            try:
-                # Check if image URL is accessible
-                head_response = self.session.head(img['url'], timeout=5)
-                
-                # Check content type
-                content_type = head_response.headers.get('content-type', '').lower()
-                if not content_type.startswith('image/'):
-                    continue
-                
-                # Check file size
-                content_length = head_response.headers.get('content-length')
-                if content_length and int(content_length) > self.max_image_size:
-                    logging.warning(f"Image too large: {img['url']}")
-                    continue
-                
-                # Download and validate image
-                response = self.session.get(img['url'], timeout=10)
-                response.raise_for_status()
-                
-                # Try to open with PIL to ensure it's a valid image
+        )[:5]
+
+        # Major index symbols
+        indices = ["SPY", "QQQ", "DIA", "VIX", "IWM", "VTI", "VOO"]
+        financial_data["indices"] = [
+            idx for idx in indices if idx in content.upper()
+        ]
+
+        # General financial keywords
+        financial_keywords = [
+            "earnings",
+            "revenue",
+            "profit",
+            "growth",
+            "trading",
+            "market",
+            "nasdaq",
+            "dow",
+        ]
+        financial_data["keywords"] = [
+            kw for kw in financial_keywords if kw.lower() in content.lower()
+        ]
+
+        return financial_data
+
+    def _find_real_stock_charts(
+        self, stocks: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Attempts to find real stock charts from multiple reliable sources.
+        """
+        images = []
+        chart_sources = [
+            self._get_finviz_chart,
+            self._get_yahoo_finance_chart,
+            self._get_tradingview_chart,
+            self._get_investing_com_chart,
+        ]
+
+        for stock in stocks[:3]:
+            for chart_source in chart_sources:
                 try:
-                    image_data = Image.open(io.BytesIO(response.content))
-                    width, height = image_data.size
-                    
-                    # Skip very small images (likely icons or thumbnails)
-                    if width < 200 or height < 150:
-                        continue
-                    
-                    # Add image data and metadata
-                    img['image_data'] = response.content
-                    img['content_type'] = content_type
-                    img['file_size'] = len(response.content)
-                    img['dimensions'] = (width, height)
-                    
-                    validated.append(img)
-                    
-                    logging.info(f"Validated image: {img['url']} ({width}x{height}, {len(response.content)} bytes)")
-                    
-                except Exception as pil_error:
-                    logging.warning(f"Invalid image format: {img['url']} - {str(pil_error)}")
-                    continue
-                
-            except Exception as e:
-                logging.warning(f"Failed to validate image {img['url']}: {str(e)}")
-                continue
-        
-        return validated
-    
-    def create_image_caption(self, image_data: Dict) -> str:
-        """Create a caption for the image suitable for Telegram"""
-        caption_parts = []
-        
-        # Add description from alt text or caption
-        if image_data.get('caption'):
-            caption_parts.append(image_data['caption'])
-        elif image_data.get('alt_text') and len(image_data['alt_text']) > 5:
-            caption_parts.append(image_data['alt_text'].title())
-        
-        # Add source attribution
-        source_domain = image_data['source_domain']
-        caption_parts.append(f"📊 Source: {source_domain}")
-        
-        return "\n".join(caption_parts)[:1024]  # Telegram caption limit
+                    chart_data = chart_source(stock)
+                    if chart_data:
+                        images.append(chart_data)
+                        logger.info(
+                            f"Found chart for {stock} from {chart_source.__name__}"
+                        )
+                        break
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to get chart from {chart_source.__name__} for {stock}: {e}"
+                    )
+        return images
 
+    def _get_finviz_chart(self, symbol: str) -> Dict[str, Any]:
+        """Retrieves a daily chart from Finviz."""
+        chart_url = f"https://finviz.com/chart.ashx?t={symbol}&ty=c&ta=1&p=d&s=l"
+        if self._verify_image_url(chart_url):
+            return {
+                "url": chart_url,
+                "type": "stock_chart",
+                "symbol": symbol,
+                "source": "finviz",
+                "description": f"{symbol} daily stock chart from Finviz",
+            }
+        return None
 
-def extract_article_images(article_urls: List[str]) -> List[Dict]:
-    """
-    Main function to extract images from article URLs
+    def _get_yahoo_finance_chart(self, symbol: str) -> Dict[str, Any]:
+        """Retrieves a daily chart from Yahoo Finance."""
+        chart_url = f"https://chart.yahoo.com/z?s={symbol}&t=1d&q=l&l=on&z=s&p=m50,m200&a=v&c="
+        if self._verify_image_url(chart_url):
+            return {
+                "url": chart_url,
+                "type": "stock_chart",
+                "symbol": symbol,
+                "source": "yahoo_finance",
+                "description": f"{symbol} stock chart from Yahoo Finance",
+            }
+        return None
+
+    def _get_tradingview_chart(self, symbol: str) -> Dict[str, Any]:
+        """Retrieves a chart snapshot from TradingView."""
+        chart_url = f"https://s3.tradingview.com/snapshots/u/{symbol}.png"
+        if self._verify_image_url(chart_url):
+            return {
+                "url": chart_url,
+                "type": "stock_chart",
+                "symbol": symbol,
+                "source": "tradingview",
+                "description": f"{symbol} chart snapshot from TradingView",
+            }
+        return None
+
+    def _get_investing_com_chart(self, symbol: str) -> Dict[str, Any]:
+        """Retrieves a daily chart from Investing.com."""
+        chart_url = (
+            f"https://i-invdn-com.investing.com/charts/us_stocks_{symbol.lower()}_1d.png"
+        )
+        if self._verify_image_url(chart_url):
+            return {
+                "url": chart_url,
+                "type": "stock_chart",
+                "symbol": symbol,
+                "source": "investing_com",
+                "description": f"{symbol} chart from Investing.com",
+            }
+        return None
+
+    def _find_market_index_charts(self) -> List[Dict[str, Any]]:
+        """
+        Finds charts for major market indices.
+        """
+        images = []
+        indices = [
+            {"symbol": "SPY", "name": "S&P 500"},
+            {"symbol": "QQQ", "name": "NASDAQ"},
+            {"symbol": "DIA", "name": "Dow Jones"},
+        ]
+
+        for index in indices[:2]:
+            chart_url = (
+                f"https://finviz.com/chart.ashx?t={index['symbol']}&ty=c&ta=1&p=d&s=l"
+            )
+            if self._verify_image_url(chart_url):
+                images.append(
+                    {
+                        "url": chart_url,
+                        "type": "index_chart",
+                        "symbol": index["symbol"],
+                        "source": "finviz",
+                        "description": f"{index['name']} ({index['symbol']}) index chart",
+                    }
+                )
+        return images
+
+    def _search_real_financial_images(
+        self, financial_terms: Dict[str, List[str]], max_images: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Searches for images using the Serper API based on extracted financial terms.
+        """
+        images = []
+        serper_key = os.getenv("SERPER_API_KEY")
+        if not serper_key:
+            logger.warning("SERPER_API_KEY not found. Skipping Serper search.")
+            return images
+
+        query_parts = ["financial chart"]
+        if financial_terms["stocks"]:
+            query_parts.append(f"{financial_terms['stocks'][0]} stock chart")
+        if financial_terms["keywords"]:
+            query_parts.extend(financial_terms["keywords"][:2])
+
+        query = " ".join(query_parts) + " market graph today"
+        logger.info(f"Serper search query: {query}")
+
+        url = "https://google.serper.dev/images"
+        payload = {
+            "q": query,
+            "num": max_images * 3,
+            "gl": "us",
+            "safe": "active",
+        }
+        headers = {"X-API-KEY": serper_key, "Content-Type": "application/json"}
+
+        try:
+            response = requests.post(
+                url, json=payload, headers=headers, timeout=20
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            for img_data in data.get("images", []):
+                if len(images) >= max_images:
+                    break
+
+                img_url = img_data.get("imageUrl") or img_data.get("link")
+                title = img_data.get("title", "Financial Chart")
+
+                if self._is_quality_financial_image(title, img_url):
+                    if self._verify_image_url(img_url, quick_check=True):
+                        images.append(
+                            {
+                                "url": img_url,
+                                "type": "financial_search",
+                                "title": title,
+                                "source": "serper_search",
+                                "description": title,
+                            }
+                        )
+                        logger.info(f"Found quality image: {title}")
+        except Exception as e:
+            logger.error(f"Serper image search failed: {e}")
+        return images
+
+    def _get_realtime_financial_charts(self, max_images: int) -> List[Dict[str, Any]]:
+        """
+        Provides a fallback list of real-time market overview charts.
+        """
+        images = []
+        market_charts = [
+            {
+                "url": "https://finviz.com/grp_image.ashx?bar_sector_t.png",
+                "type": "sector_performance",
+                "source": "finviz",
+                "description": "Sector Performance Heatmap",
+            },
+            {
+                "url": "https://finviz.com/grp_image.ashx?bar_industry_d.png",
+                "type": "industry_performance",
+                "source": "finviz",
+                "description": "Industry Performance Overview",
+            },
+        ]
+
+        for chart in market_charts:
+            if len(images) >= max_images:
+                break
+            if self._verify_image_url(chart["url"], quick_check=True):
+                images.append(chart)
+        return images
+
+    def _is_quality_financial_image(self, title: str, url: str) -> bool:
+        """
+        Checks if an image is a high-quality financial chart based on its title and URL.
+        """
+        if not title or not url:
+            return False
+
+        quality_indicators = [
+            "chart",
+            "graph",
+            "stock",
+            "market",
+            "trading",
+            "financial",
+            "price",
+            "volume",
+            "earnings",
+            "revenue",
+            "index",
+            "nasdaq",
+            "dow",
+            "analysis",
+        ]
+
+        low_quality_indicators = [
+            "meme",
+            "joke",
+            "funny",
+            "cartoon",
+            "logo",
+            "icon",
+            "avatar",
+            "wallpaper",
+            "template",
+        ]
+
+        text_to_check = (title + " " + url).lower()
+
+        has_quality = any(indicator in text_to_check for indicator in quality_indicators)
+        has_low_quality = any(
+            indicator in text_to_check for indicator in low_quality_indicators
+        )
+
+        return has_quality and not has_low_quality
+
+    def _verify_image_url(self, image_url: str, quick_check: bool = False) -> bool:
+        """
+        Verifies that an image URL is accessible and valid.
+        """
+        try:
+            if quick_check:
+                return image_url.startswith(("http://", "https://"))
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            response = requests.head(
+                image_url, timeout=5, headers=headers, allow_redirects=True
+            )
+            response.raise_for_status()
+
+            content_type = response.headers.get("content-type", "").lower()
+            return content_type.startswith("image/")
+        except Exception as e:
+            logger.debug(f"URL verification failed for {image_url}: {e}")
+            return False
+
+    def _verify_and_filter_images(
+        self, images: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Iterates through a list of images, verifies each URL, and returns a list of
+        only the accessible ones.
+        """
+        verified_images = []
+        for img in images:
+            url = img.get("url")
+            if url and self._verify_image_url(url):
+                verified_images.append(img)
+                logger.info(f"Verified image: {img.get('description', 'Unknown')}")
+            else:
+                logger.warning(
+                    f"Failed verification for URL: {img.get('url', 'Unknown')}"
+                )
+        return verified_images
+
+    def _format_image_results(self, images: List[Dict[str, Any]]) -> str:
+        """
+        Formats the list of verified images into a human-readable string.
+        """
+        if not images:
+            return "No accessible financial images found. Please proceed without images."
+
+        result_parts = ["=== VERIFIED FINANCIAL IMAGES FOUND ===\n"]
+
+        for i, img in enumerate(images, 1):
+            image_info = f"""
+Image {i}:
+- URL: {img['url']}
+- Type: {img.get('type', 'unknown')}
+- Description: {img.get('description', 'Financial visualization')}
+- Source: {img.get('source', 'unknown')}
+- Symbol: {img.get('symbol', 'N/A')}
+---
+"""
+            result_parts.append(image_info)
+
+        result_parts.append(f"Total verified images: {len(images)}")
+        return "\n".join(result_parts)
     
-    Args:
-        article_urls: List of news article URLs
-        
-    Returns:
-        List of validated image data dictionaries
-    """
-    extractor = ArticleImageExtractor()
-    return extractor.extract_images_from_articles(article_urls)

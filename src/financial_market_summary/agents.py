@@ -1,142 +1,179 @@
-from crewai import Agent, LLM
-from textwrap import dedent
-import os
 import logging
+import os
+import time
+from typing import Dict, Type
+from crewai import Agent, LLM
+from .tools.tavily_search import SerperFinancialTool
+from .tools.tavily_search import TavilyFinancialTool, SerperFinancialTool
+from .tools.telegram_sender import TelegramSender
+from .tools.image_finder import ImageFinder
+from .tools.translator import MultiLanguageTranslator
+
 
 logger = logging.getLogger(__name__)
 
 
-class FinancialMarketAgents:
-    def __init__(self, llm=None):
-        """
-        Initialize agents with a Gemini LLM.
-        If llm is not provided, it creates one using the GOOGLE_API_KEY.
-        """
-        self.llm = llm or self._create_gemini_llm()
+class FinancialAgents:
+    """
+    A factory class for creating specialized financial AI agents.
+
+    This class manages the initialization of tools and a shared LLM instance,
+    providing a consistent way to create and configure agents for a financial
+    news workflow.
+    """
+
+    def __init__(self):
+        """Initializes all the necessary tools and the Gemini LLM client."""
+        self.tavily_tool = TavilyFinancialTool()
+        self.serper_tool = SerperFinancialTool()
+        self.telegram_sender = TelegramSender()
+        self.image_finder = ImageFinder()
+        self.translator = MultiLanguageTranslator()
+
+        # Initialize the shared Gemini LLM client
+        self.gemini_llm = self._create_gemini_llm()
 
     def _create_gemini_llm(self) -> LLM:
         """
-        Creates and configures a Gemini LLM instance using GOOGLE_API_KEY.
+        Creates and configures a Gemini LLM instance.
+
+        This method includes error handling for the API key and sets
+        conservative parameters to manage token usage and request timeouts.
         """
-        google_api_key = os.getenv("GOOGLE_API_KEY")
-        if not google_api_key:
-            logger.warning("GOOGLE_API_KEY not found. Agents may fail without a valid API key.")
-        
         try:
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                raise ValueError("GOOGLE_API_KEY not found in environment variables.")
+
+            # Configure LLM with conservative settings to manage API usage
             llm = LLM(
                 model="gemini/gemini-2.5-flash",
-                api_key=google_api_key or "",
-                provider="api",  # ensures we do NOT use Vertex
+                api_key=google_api_key,
                 temperature=0.3,
                 max_tokens=2048,
                 request_timeout=60,
             )
+
             logger.info("Gemini LLM initialized successfully.")
-            print("Using LLM provider:", llm.provider)
             return llm
 
         except Exception as e:
             logger.error(f"Failed to initialize Gemini LLM: {e}")
+            # Fallback to a basic LLM configuration if initialization fails
             return LLM(
                 model="gemini/gemini-2.5-flash",
-                api_key=google_api_key or "",
-                provider="api"
+                api_key=os.getenv("GOOGLE_API_KEY", ""),
+                temperature=0.3,
             )
 
-    # --------------------- Agents ---------------------
+    # --- Agent Creation Methods ---
 
-    def search_agent(self):
+    def search_agent(self) -> Agent:
+        """
+        Creates an agent specialized in searching for financial news.
+
+        This agent is designed to efficiently find relevant market data and
+        news from reliable sources.
+        """
         return Agent(
-            role='Financial News Search Specialist',
-            goal='Find the most recent and relevant US financial market news with complete article information',
-            backstory=dedent("""\
-                You are an expert financial news researcher with deep knowledge of US markets.
-                You focus on NYSE, NASDAQ, S&P 500, Dow Jones, and major American companies.
-            """),
+            role="Financial News Search Specialist",
+            goal="Search and gather the latest US financial news and market data efficiently.",
+            backstory="""You are an expert financial news researcher with deep knowledge of
+            US markets. You excel at finding the most relevant and recent financial news from
+            reliable sources like Bloomberg, Reuters, CNBC, and MarketWatch. You work efficiently
+            to minimize API calls while maximizing information quality.""",
+            tools=[self.tavily_tool, self.serper_tool],
             verbose=True,
+            memory=True,
             allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=300,
+            max_iter=2,
+            llm=self.gemini_llm,
         )
 
-    def summary_agent(self):
-        return Agent(
-            role='Senior Financial Market Analyst',
-            goal='Create professional market summaries with visual content awareness',
-            backstory=dedent("""\
-                Experienced Wall Street analyst summarizing US market news clearly and professionally.
-                You consider charts and graphs while writing summaries.
-            """),
-            verbose=True,
-            allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=300,
-        )
+    def summary_agent(self) -> Agent:
+        """
+        Creates an agent specialized in creating concise financial summaries.
 
-    def image_extraction_agent(self):
+        This agent distills complex financial information into clear, actionable
+        insights while adhering to strict word count limits.
+        """
         return Agent(
-            role='Financial Content Visual Specialist',
-            goal='Extract and curate financial charts, graphs, and visual content',
-            backstory=dedent("""\
-                Expert in financial visual content. Focus on charts, graphs, and infographics that support market news.
-            """),
-            verbose=True,
-            allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=600,
+            role="Senior Financial Market Analyst",
+            goal="Create concise, actionable financial market summaries under 500 words efficiently.",
+            backstory="""You are a seasoned financial analyst with 15+ years of experience
+            in equity research and market analysis. You excel at distilling complex financial
+            information into clear, actionable insights quickly and efficiently. You understand
+            the importance of working within API constraints while maintaining quality.""",
             tools=[],
+            verbose=True,
+            memory=True,
+            allow_delegation=False,
+            max_iter=1,
+            llm=self.gemini_llm,
         )
 
-    def formatting_agent(self):
+    def formatting_agent(self) -> Agent:
+        """
+        Creates an agent specialized in formatting content with visual elements.
+
+        This agent combines analytical expertise with design knowledge to create
+        well-formatted content with appropriate visual elements.
+        """
         return Agent(
-            role='Financial Content Integration Specialist',
-            goal='Combine written market analysis with visual content into professional reports',
-            backstory=dedent("""\
-                Expert in financial content presentation and formatting for professional multi-channel distribution.
-            """),
+            role="Financial Content Formatter and Visualization Expert",
+            goal="Format financial summaries with relevant visual elements efficiently.",
+            backstory="""You are a skilled financial content specialist who combines
+            analytical expertise with visual design knowledge. You work efficiently to
+            create well-formatted content with appropriate visual elements while being
+            mindful of resource constraints.""",
+            tools=[self.image_finder],
             verbose=True,
+            memory=True,
             allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=180,
+            max_iter=1,
+            llm=self.gemini_llm,
         )
 
-    def translation_agent(self):
+    def translation_agent(self) -> Agent:
+        """
+        Creates an agent specialized in high-fidelity financial translation.
+
+        This agent accurately translates financial content to Arabic, Hindi, or
+        Hebrew, preserving technical terminology, numbers, and formatting.
+        """
         return Agent(
-            role='Financial Content Multilingual Specialist',
-            goal='Provide accurate translations of financial content while preserving technical accuracy',
-            backstory=dedent("""\
-                Professional financial translator fluent in English, Arabic, Hindi, and Hebrew. Maintains technical accuracy.
-            """),
+            role="Multilingual Financial Translation Specialist",
+            goal="Translate financial content accurately while preserving technical terminology.",
+            backstory="""You are a professional financial translator with expertise in
+            Arabic, Hindi, and Hebrew. You work efficiently to provide accurate translations
+            while being mindful of API rate limits. You preserve all financial terms,
+            numbers, and formatting in your translations.""",
+            tools=[self.translator],
             verbose=True,
+            memory=True,
             allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=240,
-            tools=[],
+            max_iter=1,
+            llm=self.gemini_llm,
         )
 
-    def distribution_agent(self):
+    def send_agent(self) -> Agent:
+        """
+        Creates an agent specialized in content distribution via Telegram.
+
+        This agent ensures the timely and accurate dissemination of financial
+        information through Telegram channels.
+        """
         return Agent(
-            role='Financial Content Distribution Specialist',
-            goal='Deliver financial content with images to audiences via Telegram',
-            backstory=dedent("""\
-                Specialist in multi-channel financial content distribution, ensuring formatting and readability.
-            """),
+            role="Financial Content Distribution Manager",
+            goal="Efficiently distribute financial summaries to Telegram channels.",
+            backstory="""You are a digital content distribution expert specializing in
+            financial communications. You ensure timely, accurate dissemination of information
+            through Telegram while working efficiently within system constraints.""",
+            tools=[self.telegram_sender],
             verbose=True,
+            memory=True,
             allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=300,
-            tools=[],
+            max_iter=1,
+            llm=self.gemini_llm,
         )
 
-    def quality_assurance_agent(self):
-        return Agent(
-            role='Financial Content Quality Assurance Specialist',
-            goal='Ensure all financial content meets professional standards',
-            backstory=dedent("""\
-                Meticulous QA specialist verifying accuracy, formatting, and translations for professional financial content.
-            """),
-            verbose=True,
-            allow_delegation=False,
-            llm=self.llm,
-            max_execution_time=180,
-        )
