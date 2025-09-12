@@ -5,7 +5,7 @@ from typing import Dict, Type
 from crewai import Agent, LLM
 from .tools.tavily_search import SerperFinancialTool
 from .tools.tavily_search import TavilyFinancialTool, SerperFinancialTool
-from .tools.telegram_sender import TelegramSender
+from .tools.telegram_sender import EnhancedTelegramSender
 from .tools.image_finder import ImageFinder
 from .tools.translator import MultiLanguageTranslator
 
@@ -26,7 +26,7 @@ class FinancialAgents:
         """Initializes all the necessary tools and the Gemini LLM client."""
         self.tavily_tool = TavilyFinancialTool()
         self.serper_tool = SerperFinancialTool()
-        self.telegram_sender = TelegramSender()
+        self.telegram_sender = EnhancedTelegramSender()
         self.image_finder = ImageFinder()
         self.translator = MultiLanguageTranslator()
 

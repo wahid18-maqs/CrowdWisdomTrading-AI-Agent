@@ -49,7 +49,7 @@ class ImageFinder(BaseTool):
             logger.info(f"Content analysis: {content_analysis}")
 
             if not content_analysis["has_financial_content"]:
-                return "No financial content found to generate relevant images for."
+                return json.dumps([])  # Return empty JSON array instead of string
 
             # Search for contextually relevant images using Serper
             relevant_images = self._search_contextual_images(content_analysis, max_images)
@@ -61,16 +61,30 @@ class ImageFinder(BaseTool):
             # Verify images are accessible
             verified_images = self._verify_images(relevant_images)
 
-            return self._format_results(verified_images, content_analysis)
+            # Return both JSON format for programmatic use AND formatted string
+            if verified_images:
+                # Create simplified JSON output for the Telegram sender
+                json_output = []
+                for img in verified_images:
+                    json_output.append({
+                        "url": img["url"],
+                        "title": img.get("title", "Financial Chart"),
+                        "source": img.get("source", "web_search"),
+                        "relevance_score": img.get("relevance_score", 0)
+                    })
+                return json.dumps(json_output)
+            else:
+                return json.dumps([])  # Empty array if no images found
 
         except Exception as e:
             error_msg = f"Contextual image search error: {e}"
-            logger.error(error_msg)
-            return error_msg
+            logger.error(error_msg, exc_info=True)
+            return json.dumps([])  # Return empty JSON on error
 
     def _analyze_content_deeply(self, content: str) -> Dict[str, Any]:
         """
         Deep analysis of content to extract all relevant financial information.
+        Enhanced to focus on key movers and specific stock mentions.
         """
         analysis = {
             "stocks": [],
@@ -79,7 +93,8 @@ class ImageFinder(BaseTool):
             "sectors": [],
             "financial_terms": [],
             "news_topics": [],
-            "has_financial_content": False
+            "has_financial_content": False,
+            "key_movers": []  # New field for key movers
         }
 
         content_lower = content.lower()
@@ -88,7 +103,7 @@ class ImageFinder(BaseTool):
         stock_pattern = r'\b([A-Z]{2,5})\b'
         potential_stocks = re.findall(stock_pattern, content)
         
-        # Major stocks with high confidence
+        # Expanded major stocks dictionary for better coverage
         major_stocks = {
             "AAPL": "Apple", "MSFT": "Microsoft", "GOOGL": "Google", "GOOG": "Alphabet",
             "AMZN": "Amazon", "TSLA": "Tesla", "NVDA": "Nvidia", "META": "Meta",
@@ -98,10 +113,12 @@ class ImageFinder(BaseTool):
             "GS": "Goldman Sachs", "MS": "Morgan Stanley", "C": "Citigroup",
             "JNJ": "Johnson & Johnson", "PFE": "Pfizer", "UNH": "UnitedHealth",
             "XOM": "ExxonMobil", "CVX": "Chevron", "WMT": "Walmart", "HD": "Home Depot",
-            "DIS": "Disney", "V": "Visa", "MA": "Mastercard", "KO": "Coca-Cola"
+            "DIS": "Disney", "V": "Visa", "MA": "Mastercard", "KO": "Coca-Cola",
+            "IBM": "IBM", "ORCL": "Oracle", "CSCO": "Cisco", "QCOM": "Qualcomm",
+            "BABA": "Alibaba", "SHOP": "Shopify", "SQ": "Block", "ZM": "Zoom"
         }
 
-        # Validate stocks by context
+        # Validate stocks by context and identify key movers
         for stock in potential_stocks:
             if stock in major_stocks:
                 # Check if it appears in financial context
@@ -115,22 +132,37 @@ class ImageFinder(BaseTool):
                     analysis["stocks"].append(stock)
                     analysis["companies"].append(major_stocks[stock])
                     analysis["has_financial_content"] = True
+                    
+                    # Check if it's a key mover (has performance indicators)
+                    key_mover_patterns = [
+                        f"{stock}.*?(?:surge|jump|gain|rise|rally|drop|fall|decline|lose).*?\\d+(?:\\.\\d+)?%",
+                        f"(?:surge|jump|gain|rise|rally|drop|fall|decline|lose).*?{stock}.*?\\d+(?:\\.\\d+)?%"
+                    ]
+                    
+                    for pattern in key_mover_patterns:
+                        if re.search(pattern, content, re.IGNORECASE):
+                            analysis["key_movers"].append({
+                                "symbol": stock,
+                                "company": major_stocks[stock]
+                            })
+                            break
 
-        # Extract company names directly mentioned
-        company_patterns = [
-            r'\b(Apple|Microsoft|Google|Amazon|Tesla|Meta|Netflix|Nvidia)\b',
-            r'\b(JPMorgan|Goldman Sachs|Bank of America|Wells Fargo)\b',
-            r'\b(Salesforce|Adobe|PayPal|Intel|AMD)\b'
-        ]
-
-        for pattern in company_patterns:
-            matches = re.findall(pattern, content, re.IGNORECASE)
-            for match in matches:
-                if match.title() not in analysis["companies"]:
-                    analysis["companies"].append(match.title())
+        # Extract company names directly mentioned with performance
+        company_performance_pattern = r'(\w+(?:\s+\w+)*?)\s+(?:surged?|jumped?|gained?|rose|rallied|dropped?|fell|declined?|lost)\s+[\d.]+%'
+        company_movers = re.findall(company_performance_pattern, content, re.IGNORECASE)
+        
+        for company in company_movers:
+            company_clean = company.strip().title()
+            if len(company_clean.split()) <= 3:  # Reasonable company name length
+                analysis["key_movers"].append({
+                    "symbol": None,
+                    "company": company_clean
+                })
+                if company_clean not in analysis["companies"]:
+                    analysis["companies"].append(company_clean)
                     analysis["has_financial_content"] = True
 
-        # Extract key financial events and topics
+        # Extract key financial events and topics (unchanged)
         event_patterns = {
             "earnings": [r"earnings", r"quarterly results", r"revenue", r"profit"],
             "market_movement": [r"surge", r"rally", r"drop", r"decline", r"gain", r"loss"],
@@ -147,41 +179,18 @@ class ImageFinder(BaseTool):
                     analysis["has_financial_content"] = True
                     break
 
-        # Extract news headlines/topics for search queries
-        # Look for news article titles or key phrases
-        headline_patterns = [
-            r'\*\*(.*?)\*\*',  # Bold text (likely headlines)
-            r'^\d+\.\s+(.+)$',  # Numbered items
-            r'Source: (.+?) \|',  # Source lines
-        ]
-
-        for pattern in headline_patterns:
-            matches = re.findall(pattern, content, re.MULTILINE)
-            for match in matches:
-                if len(match) > 10 and len(match) < 100:  # Reasonable headline length
-                    analysis["news_topics"].append(match.strip())
-
-        # Extract financial terms for better search context
-        financial_terms = [
-            "stock market", "trading", "investment", "portfolio", "dividend",
-            "market cap", "valuation", "IPO", "SEC", "NYSE", "NASDAQ"
-        ]
-
-        for term in financial_terms:
-            if term in content_lower:
-                analysis["financial_terms"].append(term)
-
         # Remove duplicates
         for key in analysis:
-            if isinstance(analysis[key], list):
+            if isinstance(analysis[key], list) and key != "key_movers":
                 analysis[key] = list(set(analysis[key]))
 
-        logger.info(f"Deep analysis found: {len(analysis['stocks'])} stocks, {len(analysis['companies'])} companies, {len(analysis['key_events'])} events")
+        logger.info(f"Deep analysis found: {len(analysis['stocks'])} stocks, {len(analysis['key_movers'])} key movers")
         return analysis
 
     def _search_contextual_images(self, analysis: Dict[str, Any], max_images: int) -> List[Dict[str, Any]]:
         """
         Search for images using Serper API based on the actual content analysis.
+        Prioritizes key movers for more targeted results.
         """
         serper_key = os.getenv("SERPER_API_KEY")
         if not serper_key:
@@ -249,27 +258,41 @@ class ImageFinder(BaseTool):
     def _build_contextual_queries(self, analysis: Dict[str, Any]) -> List[str]:
         """
         Build targeted search queries based on content analysis.
+        Enhanced to prioritize key movers.
         """
         queries = []
 
-        # Stock-specific queries
-        for stock in analysis["stocks"][:3]:  # Top 3 stocks
+        # Prioritize key movers for more targeted searches
+        for key_mover in analysis["key_movers"][:2]:  # Top 2 key movers
+            symbol = key_mover.get("symbol")
+            company = key_mover.get("company")
+            
+            if symbol:
+                queries.extend([
+                    f"{symbol} stock chart performance today key movers",
+                    f"{symbol} {company} stock price chart today",
+                    f"{symbol} financial chart analysis"
+                ])
+            elif company:
+                queries.extend([
+                    f"{company} stock chart performance today",
+                    f"{company} stock price analysis chart"
+                ])
+
+        # Stock-specific queries for non-key-movers
+        remaining_stocks = [s for s in analysis["stocks"] 
+                          if not any(km.get("symbol") == s for km in analysis["key_movers"])]
+        
+        for stock in remaining_stocks[:2]:  # Max 2 additional stocks
             company = next((comp for comp in analysis["companies"] 
                            if any(stock_name in comp for stock_name in [stock])), stock)
             
             if "earnings" in analysis["key_events"]:
-                queries.append(f"{stock} {company} earnings chart stock price today")
+                queries.append(f"{stock} {company} earnings chart stock price")
             elif "market_movement" in analysis["key_events"]:
-                queries.append(f"{stock} {company} stock chart performance today")
+                queries.append(f"{stock} {company} stock chart performance")
             else:
                 queries.append(f"{stock} stock chart financial graph")
-
-        # Company-specific queries
-        for company in analysis["companies"][:2]:
-            if "earnings" in analysis["key_events"]:
-                queries.append(f"{company} earnings report chart financial results")
-            else:
-                queries.append(f"{company} stock price chart market performance")
 
         # Event-specific queries
         if "fed_policy" in analysis["key_events"]:
@@ -281,7 +304,6 @@ class ImageFinder(BaseTool):
         # General market queries if specific content found
         if analysis["stocks"] or analysis["companies"]:
             queries.append("stock market chart today financial news trading")
-            queries.append("market analysis chart wall street performance")
 
         # Ensure we have at least some queries
         if not queries:
@@ -296,6 +318,7 @@ class ImageFinder(BaseTool):
     def _is_relevant_financial_image(self, url: str, title: str, source: str, analysis: Dict[str, Any]) -> bool:
         """
         Check if image is relevant to our content analysis.
+        Enhanced filtering for higher quality results.
         """
         if not url or not url.startswith("http"):
             return False
@@ -311,24 +334,37 @@ class ImageFinder(BaseTool):
 
         has_financial_content = any(indicator in text_to_check for indicator in financial_indicators)
 
-        # Check for content-specific relevance
+        # Enhanced content-specific relevance check
         content_relevance = False
         
-        # Check against our specific stocks/companies
-        for stock in analysis["stocks"]:
-            if stock.lower() in text_to_check:
+        # Check against key movers first (highest priority)
+        for key_mover in analysis.get("key_movers", []):
+            symbol = key_mover.get("symbol")
+            company = key_mover.get("company")
+            
+            if symbol and symbol.lower() in text_to_check:
                 content_relevance = True
                 break
-                
-        for company in analysis["companies"]:
-            if company.lower() in text_to_check:
+            if company and company.lower() in text_to_check:
                 content_relevance = True
                 break
+        
+        # Check against other stocks/companies
+        if not content_relevance:
+            for stock in analysis["stocks"]:
+                if stock.lower() in text_to_check:
+                    content_relevance = True
+                    break
+                    
+            for company in analysis["companies"]:
+                if company.lower() in text_to_check:
+                    content_relevance = True
+                    break
 
         # Check for quality sources
         quality_sources = [
             "yahoo", "bloomberg", "reuters", "cnbc", "marketwatch",
-            "investing.com", "tradingview", "finviz", "wsj"
+            "investing.com", "tradingview", "finviz", "wsj", "barrons"
         ]
         
         from_quality_source = any(source_name in text_to_check for source_name in quality_sources)
@@ -336,7 +372,7 @@ class ImageFinder(BaseTool):
         # Exclude low-quality content
         exclude_indicators = [
             "meme", "joke", "cartoon", "logo", "icon", "template",
-            "wallpaper", "avatar", "profile", "social"
+            "wallpaper", "avatar", "profile", "social", "thumbnail"
         ]
         
         is_low_quality = any(indicator in text_to_check for indicator in exclude_indicators)
@@ -347,19 +383,30 @@ class ImageFinder(BaseTool):
     def _calculate_relevance(self, title: str, source: str, analysis: Dict[str, Any]) -> int:
         """
         Calculate relevance score for ranking images.
+        Enhanced scoring for key movers.
         """
         score = 0
         text = f"{title} {source}".lower()
 
-        # Points for stock mentions
-        for stock in analysis["stocks"]:
-            if stock.lower() in text:
-                score += 10
+        # Higher points for key movers
+        for key_mover in analysis.get("key_movers", []):
+            symbol = key_mover.get("symbol")
+            company = key_mover.get("company")
+            
+            if symbol and symbol.lower() in text:
+                score += 15  # Higher score for key movers
+            if company and company.lower() in text:
+                score += 12
 
-        # Points for company mentions
-        for company in analysis["companies"]:
-            if company.lower() in text:
+        # Points for other stock mentions
+        for stock in analysis["stocks"]:
+            if stock.lower() in text and not any(km.get("symbol") == stock for km in analysis.get("key_movers", [])):
                 score += 8
+
+        # Points for other company mentions
+        for company in analysis["companies"]:
+            if company.lower() in text and not any(km.get("company") == company for km in analysis.get("key_movers", [])):
+                score += 6
 
         # Points for key events
         for event in analysis["key_events"]:
@@ -367,10 +414,10 @@ class ImageFinder(BaseTool):
                 score += 5
 
         # Points for quality sources
-        quality_sources = ["yahoo", "bloomberg", "reuters", "cnbc", "marketwatch"]
+        quality_sources = ["yahoo", "bloomberg", "reuters", "cnbc", "marketwatch", "finviz", "tradingview"]
         for source_name in quality_sources:
             if source_name in text:
-                score += 3
+                score += 4
 
         # Points for chart/graph indicators
         chart_indicators = ["chart", "graph", "performance", "analysis"]
@@ -463,39 +510,51 @@ class ImageFinder(BaseTool):
                 
         return verified
 
-    def _format_results(self, images: List[Dict[str, Any]], analysis: Dict[str, Any]) -> str:
+    def get_formatted_results(self, search_content: str, max_images: int = 3) -> str:
         """
-        Format the results for output.
+        Alternative method that returns formatted string results (for backward compatibility).
         """
-        if not images:
-            return "No contextually relevant financial images found for the provided content."
+        try:
+            # Get JSON results first
+            json_results = self._run(search_content, max_images)
+            images = json.loads(json_results) if json_results else []
+            
+            if not images:
+                return "No contextually relevant financial images found for the provided content."
 
-        result_parts = ["=== CONTEXTUAL FINANCIAL IMAGES FOUND ===\n"]
-        
-        # Add context information
-        if analysis["stocks"]:
-            result_parts.append(f"📈 Related to stocks: {', '.join(analysis['stocks'][:5])}")
-        if analysis["companies"]:
-            result_parts.append(f"🏢 Companies mentioned: {', '.join(analysis['companies'][:5])}")
-        if analysis["key_events"]:
-            result_parts.append(f"📊 Key events: {', '.join(analysis['key_events'][:3])}")
-        
-        result_parts.append("")
+            # Analyze content for context
+            content_analysis = self._analyze_content_deeply(search_content)
+            
+            result_parts = ["=== CONTEXTUAL FINANCIAL IMAGES FOUND ===\n"]
+            
+            # Add context information
+            if content_analysis["stocks"]:
+                result_parts.append(f"📈 Related to stocks: {', '.join(content_analysis['stocks'][:5])}")
+            if content_analysis["key_movers"]:
+                key_movers_str = ", ".join([km.get('symbol') or km.get('company') for km in content_analysis['key_movers'][:3]])
+                result_parts.append(f"🎯 Key movers: {key_movers_str}")
+            if content_analysis["companies"]:
+                result_parts.append(f"🏢 Companies mentioned: {', '.join(content_analysis['companies'][:5])}")
+            
+            result_parts.append("")
 
-        for i, img in enumerate(images, 1):
-            image_info = f"""
+            for i, img in enumerate(images, 1):
+                image_info = f"""
 Image {i}:
 - URL: {img['url']}
 - Type: contextual_search
 - Description: {img.get('title', 'Financial Chart')}
 - Source: {img.get('source', 'web_search')}
-- Search Query: {img.get('query', 'N/A')}
 - Relevance Score: {img.get('relevance_score', 0)}
 ---
 """
-            result_parts.append(image_info)
+                result_parts.append(image_info)
 
-        result_parts.append(f"Total contextual images: {len(images)}")
-        result_parts.append(f"Content analysis confidence: {'High' if analysis['has_financial_content'] else 'Low'}")
-        
-        return "\n".join(result_parts)
+            result_parts.append(f"Total contextual images: {len(images)}")
+            result_parts.append(f"Content analysis confidence: {'High' if content_analysis['has_financial_content'] else 'Low'}")
+            
+            return "\n".join(result_parts)
+            
+        except Exception as e:
+            logger.error(f"Formatted results error: {e}")
+            return f"Error generating formatted results: {e}"

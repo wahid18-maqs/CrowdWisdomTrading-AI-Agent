@@ -58,6 +58,7 @@ class TavilyFinancialTool(BaseTool):
     def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
         """
         Executes a time-sensitive financial news search with enhanced content structuring.
+        Default to 1 hour for real-time data.
         """
         try:
             tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -67,7 +68,7 @@ class TavilyFinancialTool(BaseTool):
             # Enhanced query construction for better results
             financial_query = self._build_enhanced_query(query)
             end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=hours_back)
+            start_time = end_time - timedelta(hours=hours_back)  # Default 1 hour
 
             url = "https://api.tavily.com/search"
             payload = {
@@ -104,7 +105,7 @@ class TavilyFinancialTool(BaseTool):
             formatted_results = self._format_enhanced_results(data, start_time, query)
 
             logger.info(
-                f"Enhanced Tavily search completed: {len(data.get('results', []))} results found."
+                f"Enhanced Tavily search completed: {len(data.get('results', []))} results found for last {hours_back} hour(s)."
             )
             return formatted_results
 
