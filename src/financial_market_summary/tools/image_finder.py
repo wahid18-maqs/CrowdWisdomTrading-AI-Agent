@@ -501,7 +501,7 @@ class ImageFinder(BaseTool):
                 
                 if response.status_code == 200:
                     content_type = response.headers.get("content-type", "").lower()
-                    if "image" in content_type or any(ext in url.lower() for ext in [".jpg", ".png", ".gif", ".webp"]):
+                    if "image" in content_type or any(ext in url.lower() for ext in [".jpg", ".png"]):
                         verified.append(img)
                         logger.info(f"Verified image: {img.get('title', 'Unknown')}")
                     

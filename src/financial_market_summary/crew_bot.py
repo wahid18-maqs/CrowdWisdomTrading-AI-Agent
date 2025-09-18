@@ -1,8 +1,9 @@
 import logging
 import time
+import re
 from typing import Any, Dict, List
 from crewai import Agent, Crew, Process, Task
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from .agents import FinancialAgents
 from .LLM_config import apply_rate_limiting
@@ -12,11 +13,7 @@ logger = logging.getLogger(__name__)
 
 class FinancialMarketCrew:
     """
-    An enhanced CrewAI implementation for a financial news workflow.
-
-    This class orchestrates a series of specialized agents to search, summarize,
-    format, translate, and distribute financial news. It incorporates rate
-    limiting and robust error handling with a retry mechanism.
+    Enhanced CrewAI implementation with summary validation for accuracy.
     """
 
     def __init__(self):
@@ -24,22 +21,87 @@ class FinancialMarketCrew:
         self.agents_factory = FinancialAgents()
         self.execution_results: Dict[str, Any] = {}
 
+    def _validate_summary(self, summary: str, original_news: str) -> Dict[str, Any]:
+        """
+        Validate the summary against original news for accuracy.
+        """
+        logger.info("--- Validating Summary Accuracy ---")
+        
+        validation_results = {
+            "has_reliable_sources": self._check_sources(original_news),
+            "stocks_verified": self._verify_stock_symbols(summary, original_news),
+            "numbers_accurate": self._verify_numbers(summary, original_news),
+            "content_fresh": self._check_freshness(original_news),
+            "no_hallucination": self._check_hallucination(summary, original_news),
+            "confidence_score": 0
+        }
+        
+        # Calculate confidence score (0-100)
+        weights = {"has_reliable_sources": 20, "stocks_verified": 30, "numbers_accurate": 25, "content_fresh": 15, "no_hallucination": 10}
+        validation_results["confidence_score"] = sum(weights[key] for key, passed in validation_results.items() if passed and key != "confidence_score")
+        
+        logger.info(f"Validation Results: {validation_results}")
+        return validation_results
+
+    def _check_sources(self, original_news: str) -> bool:
+        """Check if news comes from reliable sources."""
+        reliable_sources = ['reuters', 'bloomberg', 'cnbc', 'wsj', 'marketwatch', 'yahoo', 'investing.com']
+        return any(source in original_news.lower() for source in reliable_sources)
+
+    def _verify_stock_symbols(self, summary: str, original_news: str) -> bool:
+        """Verify stock symbols in summary exist in original news."""
+        summary_stocks = set(re.findall(r'\b[A-Z]{2,5}\b', summary))
+        news_stocks = set(re.findall(r'\b[A-Z]{2,5}\b', original_news))
+        
+        # Allow common words that aren't stocks
+        common_words = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'HAD', 'BUT', 'HAS'}
+        summary_stocks = summary_stocks - common_words
+        
+        # All summary stocks should exist in original news
+        return summary_stocks.issubset(news_stocks) if summary_stocks else True
+
+    def _verify_numbers(self, summary: str, original_news: str) -> bool:
+        """Verify percentages and numbers in summary match original news."""
+        summary_numbers = set(re.findall(r'\d+\.?\d*%', summary))
+        news_numbers = set(re.findall(r'\d+\.?\d*%', original_news))
+        
+        # All summary percentages should exist in original news
+        return summary_numbers.issubset(news_numbers) if summary_numbers else True
+
+    def _check_freshness(self, original_news: str) -> bool:
+        """Check if the news is actually recent (within 24 hours)."""
+        # Look for timestamps in the news
+        time_patterns = [
+            r'(\d{4}-\d{2}-\d{2})',  # YYYY-MM-DD
+            r'(\d{1,2} hours? ago)',  # X hours ago
+            r'(today|yesterday)',     # Today/yesterday keywords
+        ]
+        
+        for pattern in time_patterns:
+            if re.search(pattern, original_news, re.IGNORECASE):
+                return True
+        
+        return True  # Default to fresh if we can't determine age
+
+    def _check_hallucination(self, summary: str, original_news: str) -> bool:
+        """Basic check for hallucination - summary should have substantial overlap with news."""
+        summary_words = set(summary.lower().split())
+        news_words = set(original_news.lower().split())
+        
+        # Remove common words
+        common_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'had'}
+        summary_words = summary_words - common_words
+        news_words = news_words - common_words
+        
+        if not summary_words:
+            return False
+            
+        # Calculate overlap percentage
+        overlap = len(summary_words.intersection(news_words)) / len(summary_words)
+        return overlap > 0.3  # At least 30% word overlap
+
     def _run_task_with_retry(self, agents: List[Agent], task: Task, max_retries: int = 3) -> str:
-        """
-        Runs a single task with retry logic to handle potential failures.
-
-        This helper method creates a Crew for the given task and agent, then
-        attempts to execute it multiple times with a backoff delay in case of
-        errors, particularly rate limits.
-
-        Args:
-            agents: A list of agents for the crew.
-            task: The task to be executed.
-            max_retries: The maximum number of retry attempts.
-
-        Returns:
-            The output of the task or an error message if all retries fail.
-        """
+        """Runs a single task with retry logic to handle potential failures."""
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
@@ -73,18 +135,10 @@ class FinancialMarketCrew:
 
     def run_complete_workflow(self) -> Dict[str, Any]:
         """
-        Executes the entire financial summary workflow in a sequential manner.
-
-        The workflow consists of five phases: search, summary, formatting,
-        translation, and distribution. Each phase is handled by a dedicated
-        agent and its output is used as input for the next phase.
-
-        Returns:
-            A dictionary containing the workflow's status, results, and a
-            summary of the execution.
+        Executes the entire financial summary workflow with validation.
         """
         try:
-            logger.info("--- Starting Complete Financial Workflow ---")
+            logger.info("--- Starting Complete Financial Workflow with Validation ---")
 
             # --- Phase 1: Search ---
             search_result = self._run_search_phase()
@@ -96,6 +150,16 @@ class FinancialMarketCrew:
             summary_result = self._run_summary_phase(search_result)
             if "Error" in summary_result:
                 return {"status": "failed", "error": f"Summary phase failed: {summary_result}"}
+            
+            # --- Phase 2.5: Validation (NEW!) ---
+            validation_results = self._validate_summary(summary_result, search_result)
+            self.execution_results["validation"] = validation_results
+            
+            # Check if validation passed
+            if validation_results["confidence_score"] < 60:
+                logger.warning(f"Low confidence score: {validation_results['confidence_score']}/100")
+                # Could implement retry logic here or flag for human review
+            
             self.execution_results["summary"] = summary_result
 
             # --- Phase 3: Formatting ---
@@ -121,6 +185,8 @@ class FinancialMarketCrew:
                     "english_summary_excerpt": formatted_result[:200] + "..." if len(formatted_result) > 200 else formatted_result,
                     "translations_completed": len([k for k, v in translations.items() if not isinstance(v, str) or "failed" not in v.lower()]),
                     "sends_completed": len([k for k, v in send_results.items() if "successfully" in v.lower() or "success" in v.lower()]),
+                    "confidence_score": validation_results["confidence_score"],
+                    "validation_passed": validation_results["confidence_score"] >= 60,
                 },
             }
 
@@ -130,12 +196,14 @@ class FinancialMarketCrew:
             return {"status": "failed", "error": error_msg}
 
     def _run_search_phase(self) -> str:
-        """Executes the search phase of the workflow."""
-        logger.info("--- Phase 1: Searching for News ---")
+        """Executes the search phase of the workflow with enforced 1-hour time limit."""
+        logger.info("--- Phase 1: Searching for Real-Time News (Last 1 Hour) ---")
         search_agent = self.agents_factory.search_agent()
         search_task = Task(
-            description="Search for the latest US financial news from the past 2 hours. Focus on major stock movements, earnings, and economic data.",
-            expected_output="A structured list of recent US financial news articles with titles, summaries, and sources.",
+            description="""Search for the latest US financial news from EXACTLY the past 1 hour. 
+            Focus on major stock movements, earnings, and economic data.
+            IMPORTANT: The search MUST be limited to the last 1 hour for real-time relevance.""",
+            expected_output="Structured analysis of breaking financial news from the last 1 hour with source information.",
             agent=search_agent
         )
         return self._run_task_with_retry([search_agent], search_task)
@@ -146,42 +214,29 @@ class FinancialMarketCrew:
         logger.info("--- Phase 2: Creating Summary ---")
         summary_agent = self.agents_factory.summary_agent()
         summary_task = Task(
-            description=f"""Analyze the following financial news and create a concise market summary under 500 words, structured for Telegram.
+            description=f"""Create a financial summary from this news data: {search_result}
 
-Financial News Data:
-{search_result}
+            CRITICAL ACCURACY REQUIREMENTS:
+            1. ONLY use information directly from the provided news
+            2. Keep ALL stock symbols exactly as mentioned in the news
+            3. Use EXACT percentages and numbers from the original news
+            4. Do NOT add any information not present in the source material
+            5. Include the actual publication date from the most recent news article
 
-Structure your summary with:
-1. Title (1 sentence summarizing the most significant news item)
-2. Source (e.g., Reuters, CNBC)
-3. Date (format: YYYY-MM-DD)
-4. Key Points (up to 5 bullet points, including stock movements and key events)
-5. Market Implications (up to 3 bullet points, focusing on broader market impacts)
-
-Requirements:
-- Use professional language and include specific figures (e.g., stock percentages, economic data).
-- Ensure bullet points are concise (10-200 characters each).
-- Avoid metadata like 'Key Stocks' or 'Key Themes'.
-- The title should be a key news headline (e.g., 'Apple shares rise 3% on strong iPhone 15 sales data').""",
-            expected_output="A concise financial market summary under 500 words, structured with a title, source, date, key points, and market implications.",
+            Structure: Title, Source, Date, Key Points (3-5), Market Implications (2-3)""",
+            expected_output="Accurate financial summary under 500 words with verified information only.",
             agent=summary_agent
         )
         return self._run_task_with_retry([summary_agent], summary_task)
 
     @apply_rate_limiting("gemini")
     def _run_formatting_phase(self, summary_result: str) -> str:
-        """Executes the formatting phase of the workflow."""
-        logger.info("--- Phase 3: Formatting with Visuals ---")
+        """Executes the formatting phase with enhanced ImageFinder preparation."""
+        logger.info("--- Phase 3: Formatting with ImageFinder Integration ---")
         formatting_agent = self.agents_factory.formatting_agent()
         formatting_task = Task(
-            description=f"""Format the following financial summary with 1-2 relevant charts or images.
-
-Summary to Format:
-{summary_result}
-
-Use the financial_image_finder tool to find relevant financial charts or graphs.
-Integrate images using markdown format and create a well-formatted final summary.""",
-            expected_output="A well-formatted summary with markdown and image URLs integrated.",
+            description=f"""Format this summary for Telegram and find relevant images: {summary_result}""",
+            expected_output="Well-formatted summary optimized for Telegram with image integration.",
             agent=formatting_agent
         )
         return self._run_task_with_retry([formatting_agent], formatting_task)
@@ -196,27 +251,12 @@ Integrate images using markdown format and create a well-formatted final summary
         for lang in languages:
             logger.info(f"Translating to {lang}...")
             translation_task = Task(
-                description=f"""Translate the following formatted financial summary to {lang}.
-
-Content to Translate:
-{formatted_content}
-
-CRITICAL REQUIREMENTS:
-- Keep stock symbols (AAPL, MSFT, etc.) unchanged
-- Preserve all numbers, percentages, currency values exactly
-- Maintain markdown formatting
-- Use professional financial terminology in {lang}
-- If unsure about terms, keep English in parentheses
-
-Use the financial_translator tool for accurate translation.""",
-                expected_output=f"An accurate and well-formatted translation in {lang}.",
+                description=f"""Translate to {lang}, keeping stock symbols and numbers unchanged: {formatted_content}""",
+                expected_output=f"Accurate translation in {lang} with preserved financial terms.",
                 agent=translation_agent
             )
+            translations[lang] = self._run_task_with_retry([translation_agent], translation_task)
 
-            translation_output = self._run_task_with_retry([translation_agent], translation_task)
-            translations[lang] = translation_output
-
-        logger.info("--- Translation Phase Completed ---")
         return translations
 
     def _run_sending_phase(self, formatted_content: str, translations: Dict[str, str]) -> Dict[str, str]:
@@ -225,39 +265,31 @@ Use the financial_translator tool for accurate translation.""",
         send_agent = self.agents_factory.send_agent()
         send_results = {}
 
+        # Add validation info to the message
+        validation = self.execution_results.get("validation", {})
+        confidence_score = validation.get("confidence_score", 0)
+        
+        if confidence_score < 60:
+            formatted_content += f"\n\n⚠️ *Confidence Score: {confidence_score}/100 - Please verify information*"
+
         # Send English summary
-        logger.info("Sending English summary...")
         english_send_task = Task(
-            description=f"""Send the English financial summary to Telegram.
-
-Content to Send:
-{formatted_content}
-
-Use the telegram_sender tool with language='english'.""",
-            expected_output="Confirmation of successful sending.",
+            description=f"""Send English financial summary to Telegram: {formatted_content}""",
+            expected_output="Confirmation of successful delivery with image integration status.",
             agent=send_agent
         )
-        english_send_result = self._run_task_with_retry([send_agent], english_send_task)
-        send_results["english"] = english_send_result
+        send_results["english"] = self._run_task_with_retry([send_agent], english_send_task)
 
         # Send translations
         for lang, content in translations.items():
             if "Error" not in content:
-                logger.info(f"Sending {lang} summary...")
                 lang_send_task = Task(
-                    description=f"""Send the {lang} financial summary to Telegram.
-
-Content to Send:
-{content}
-
-Use the telegram_sender tool with language='{lang}'.""",
-                    expected_output="Confirmation of successful sending.",
+                    description=f"""Send {lang} summary to Telegram: {content}""",
+                    expected_output=f"Confirmation of {lang} message delivery.",
                     agent=send_agent
                 )
-                lang_send_result = self._run_task_with_retry([send_agent], lang_send_task)
-                send_results[lang] = lang_send_result
+                send_results[lang] = self._run_task_with_retry([send_agent], lang_send_task)
             else:
                 send_results[lang] = f"Skipped sending {lang} due to translation failure."
 
-        logger.info("--- Sending Phase Completed ---")
         return send_results

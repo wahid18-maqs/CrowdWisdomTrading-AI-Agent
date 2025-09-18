@@ -82,7 +82,7 @@ def run_financial_summary() -> Dict[str, Any]:
     quota_tier = check_api_quotas()
     
     try:
-        from financial_market_summary.crew_bot import FinancialMarketCrew
+        from .crew_bot import FinancialMarketCrew
         
         logger.info("--- Starting Financial Market Summary Workflow ---")
         logger.info(f"Execution started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

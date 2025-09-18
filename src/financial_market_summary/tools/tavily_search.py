@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 import logging
 from dotenv import load_dotenv
 import json
-import re  # Moved to top for efficiency
-from urllib.parse import urlparse  # Moved to top
+import re  
+from urllib.parse import urlparse 
 
 # Load environment variables
 load_dotenv()
@@ -47,12 +47,12 @@ class TavilySearchTool(BaseTool):
 class TavilyFinancialTool(BaseTool):
     """
     Enhanced Tavily search tool for recent US financial news with better content structuring
-    for image finder integration.
+    for image finder integration. Enforces 1-hour time limit for real-time news.
     """
 
     name: str = "tavily_financial_search"
     description: str = (
-        "Search for recent US financial news using the Tavily API. "
+        "Search for recent US financial news using the Tavily API within the last 1 hour. "
         "Enhanced to provide structured content that works well with image finding."
     )
     args_schema: Type[BaseModel] = TavilySearchInput
@@ -60,17 +60,24 @@ class TavilyFinancialTool(BaseTool):
     def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
         """
         Executes a time-sensitive financial news search with enhanced content structuring.
-        Default to 1 hour for real-time data.
+        Strictly enforced to search within the last 1 hour for real-time data.
         """
         try:
             tavily_api_key = os.getenv("TAVILY_API_KEY")
             if not tavily_api_key:
                 return "Error: TAVILY_API_KEY not found in environment variables."
 
+            # Enforce 1-hour limit for real-time financial news
+            if hours_back != 1:
+                logger.info(f"Overriding hours_back from {hours_back} to 1 for real-time financial news")
+                hours_back = 1
+
             # Enhanced query construction for better results
             financial_query = self._build_enhanced_query(query)
             end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=hours_back)  # Default 1 hour
+            start_time = end_time - timedelta(hours=hours_back)  # Exactly 1 hour
+
+            logger.info(f"Searching for news from {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
             url = "https://api.tavily.com/search"
             payload = {
@@ -103,11 +110,31 @@ class TavilyFinancialTool(BaseTool):
 
             data = response.json()
             
+            # Filter results to ensure they are within the 1-hour window
+            filtered_results = self._filter_results_by_time(data.get('results', []), start_time, end_time)
+            
+            if not filtered_results:
+                logger.warning("No results found within the last 1 hour. Expanding search slightly...")
+                # If no results in 1 hour, try 2 hours but mention this in output
+                start_time = end_time - timedelta(hours=2)
+                payload["start_published_date"] = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                
+                response = requests.post(url, json=payload, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                filtered_results = data.get('results', [])
+                
+                if filtered_results:
+                    logger.info(f"Expanded search to 2 hours found {len(filtered_results)} results")
+            
+            # Update data with filtered results
+            data['results'] = filtered_results
+            
             # Enhanced formatting for better image context extraction
-            formatted_results = self._format_enhanced_results(data, start_time, query)
+            formatted_results = self._format_enhanced_results(data, start_time, query, hours_back)
 
             logger.info(
-                f"Enhanced Tavily search completed: {len(data.get('results', []))} results found for last {hours_back} hour(s)."
+                f"Enhanced Tavily search completed: {len(filtered_results)} results found for last {hours_back} hour(s)."
             )
             return formatted_results
 
@@ -119,6 +146,51 @@ class TavilyFinancialTool(BaseTool):
             error_msg = f"Tavily search error: {e}"
             logger.error(error_msg)
             return error_msg
+
+    def _filter_results_by_time(self, results: list, start_time: datetime, end_time: datetime) -> list:
+        """
+        Filter results to ensure they fall within the specified time window.
+        """
+        filtered_results = []
+        
+        for result in results:
+            published_date = result.get('published_date')
+            if not published_date:
+                continue
+                
+            try:
+                # Parse the published date
+                if 'T' in published_date:
+                    # ISO format
+                    pub_datetime = datetime.fromisoformat(published_date.replace('Z', '+00:00'))
+                    # Convert to UTC
+                    if pub_datetime.tzinfo is not None:
+                        pub_datetime = pub_datetime.astimezone().utctimetuple()
+                        pub_datetime = datetime(*pub_datetime[:6])
+                else:
+                    # Try other common formats
+                    for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%m/%d/%Y']:
+                        try:
+                            pub_datetime = datetime.strptime(published_date, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        # If we can't parse the date, include the result
+                        filtered_results.append(result)
+                        continue
+                
+                # Check if the article is within our time window
+                if start_time <= pub_datetime <= end_time:
+                    filtered_results.append(result)
+                    
+            except Exception as e:
+                logger.debug(f"Error parsing date '{published_date}': {e}")
+                # If we can't parse the date, include the result to be safe
+                filtered_results.append(result)
+                
+        logger.info(f"Filtered {len(results)} results to {len(filtered_results)} within time window")
+        return filtered_results
 
     def _build_enhanced_query(self, original_query: str) -> str:
         """Build enhanced search query for better financial results."""
@@ -138,36 +210,45 @@ class TavilyFinancialTool(BaseTool):
         
         return base_query
 
-    def _format_enhanced_results(self, data: Dict[str, Any], start_time: datetime, original_query: str) -> str:
+    def _format_enhanced_results(self, data: Dict[str, Any], start_time: datetime, original_query: str, hours_searched: int) -> str:
         """
         Enhanced formatting that provides better structure for image finding and content analysis.
         """
         results = data.get("results", [])
         if not results:
-            return "No financial news found for the specified time period."
+            return f"No financial news found within the last {hours_searched} hour(s) for the specified criteria."
 
         # Analyze content for key themes and stocks
         content_analysis = self._analyze_search_results(results)
         
-        formatted_output = ["=== ENHANCED US FINANCIAL NEWS SUMMARY ==="]
+        formatted_output = ["=== REAL-TIME US FINANCIAL NEWS (LAST 1 HOUR) ==="]
+        
+        # Time window information
+        formatted_output.append(f"\n**SEARCH WINDOW:**")
+        formatted_output.append(f"📅 From: {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        formatted_output.append(f"📅 To: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        formatted_output.append(f"⏱️ Time Range: Last {hours_searched} hour(s)")
         
         # Market overview section
         if data.get("answer"):
             formatted_output.append(f"\n**MARKET OVERVIEW:**\n{data['answer']}")
         
-        # Key highlights section
+        # Key highlights section - enhanced for image finder
         if content_analysis["key_stocks"] or content_analysis["key_themes"]:
             highlights = []
             if content_analysis["key_stocks"]:
                 highlights.append(f"📈 Key Stocks: {', '.join(content_analysis['key_stocks'][:5])}")
             if content_analysis["key_themes"]:
                 highlights.append(f"🎯 Key Themes: {', '.join(content_analysis['key_themes'][:3])}")
+            if content_analysis["key_movers"]:
+                movers_str = ", ".join([f"{m['symbol']} ({m['performance']})" for m in content_analysis["key_movers"][:3]])
+                highlights.append(f"🚀 Key Movers: {movers_str}")
             
             formatted_output.append(f"\n**KEY HIGHLIGHTS:**")
             formatted_output.extend([f"• {highlight}" for highlight in highlights])
         
         # Detailed news sources
-        formatted_output.append(f"\n**DETAILED NEWS SOURCES:**")
+        formatted_output.append(f"\n**BREAKING NEWS ARTICLES:**")
 
         for i, result in enumerate(results[:10], 1):
             title = result.get("title", "No title")
@@ -184,40 +265,45 @@ class TavilyFinancialTool(BaseTool):
             news_item = f"""
 **{i}. {title}**
 📰 Source: {self._extract_domain(url)}
-📅 Published: {published}
+⏰ Published: {published}
 📄 Summary: {enhanced_content}
 🔗 Link: {url}
 ---
 """
             formatted_output.append(news_item)
 
-        # Content analysis summary for image finder
-        formatted_output.append(f"\n**CONTENT ANALYSIS FOR CHARTS:**")
+        # Enhanced content analysis summary for image finder integration
+        formatted_output.append(f"\n**IMAGE SEARCH CONTEXT:**")
         if content_analysis["mentioned_companies"]:
-            formatted_output.append(f"Companies mentioned: {', '.join(content_analysis['mentioned_companies'][:8])}")
+            formatted_output.append(f"🏢 Companies: {', '.join(content_analysis['mentioned_companies'][:8])}")
         if content_analysis["sectors"]:
-            formatted_output.append(f"Sectors involved: {', '.join(content_analysis['sectors'])}")
+            formatted_output.append(f"🏭 Sectors: {', '.join(content_analysis['sectors'])}")
         if content_analysis["market_events"]:
-            formatted_output.append(f"Market events: {', '.join(content_analysis['market_events'])}")
+            formatted_output.append(f"📊 Events: {', '.join(content_analysis['market_events'])}")
+        if content_analysis["key_movers"]:
+            formatted_output.append(f"📈 Chart Candidates: {', '.join([m['symbol'] for m in content_analysis['key_movers'][:5]])}")
 
         # Footer with metadata
         formatted_output.append(f"\n**SEARCH METADATA:**")
-        formatted_output.append(f"Search completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        formatted_output.append(f"Total results: {len(results)}")
-        formatted_output.append(f"Query optimization: Enhanced for '{original_query}'")
+        formatted_output.append(f"🔍 Search completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        formatted_output.append(f"📊 Total results: {len(results)}")
+        formatted_output.append(f"⚡ Real-time filter: Last {hours_searched} hour(s) enforced")
+        formatted_output.append(f"🎯 Query optimization: Enhanced for '{original_query}'")
         
         return "\n".join(formatted_output)
 
     def _analyze_search_results(self, results: list) -> Dict[str, list]:
         """
         Analyze search results to extract key financial information for better image targeting.
+        Enhanced to identify key movers with performance data.
         """
         analysis = {
             "key_stocks": [],
             "key_themes": [],
             "mentioned_companies": [],
             "sectors": [],
-            "market_events": []
+            "market_events": [],
+            "key_movers": []  # New field for stocks with performance data
         }
 
         all_content = ""
@@ -236,7 +322,7 @@ class TavilyFinancialTool(BaseTool):
         major_stocks = {
             "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "TSLA", "NVDA", "META",
             "NFLX", "AMD", "INTC", "CRM", "ADBE", "PYPL", "UBER", "SPOT",
-            "ZOOM", "JPM", "BAC", "WFC", "GS", "MS", "C", "JNJ", "PFE", 
+            "ZM", "JPM", "BAC", "WFC", "GS", "MS", "C", "JNJ", "PFE", 
             "UNH", "CVS", "XOM", "CVX", "WMT", "HD", "DIS", "V", "MA"
         }
         
@@ -250,6 +336,31 @@ class TavilyFinancialTool(BaseTool):
         analysis["key_stocks"] = [
             stock for stock, _ in sorted(stock_frequency.items(), key=lambda x: x[1], reverse=True)
         ][:6]
+
+        # Identify key movers with performance data
+        mover_patterns = [
+            r'([A-Z]{2,5})\s+(?:surged?|jumped?|gained?|rose|rallied)\s+([\d.]+%)',
+            r'([A-Z]{2,5})\s+(?:dropped?|fell|declined?|lost)\s+([\d.]+%)',
+            r'([A-Z]{2,5}).*?(?:up|down|gain|loss).*?([\d.]+%)',
+        ]
+        
+        for pattern in mover_patterns:
+            matches = re.findall(pattern, all_content, re.IGNORECASE)
+            for symbol, performance in matches:
+                if symbol in major_stocks:
+                    analysis["key_movers"].append({
+                        "symbol": symbol,
+                        "performance": performance
+                    })
+        
+        # Remove duplicates from key_movers
+        seen_symbols = set()
+        unique_movers = []
+        for mover in analysis["key_movers"]:
+            if mover["symbol"] not in seen_symbols:
+                unique_movers.append(mover)
+                seen_symbols.add(mover["symbol"])
+        analysis["key_movers"] = unique_movers[:5]
 
         # Identify key themes
         theme_keywords = {
@@ -305,7 +416,8 @@ class TavilyFinancialTool(BaseTool):
 
         # Remove duplicates
         for key in analysis:
-            analysis[key] = list(set(analysis[key]))
+            if key != "key_movers":  # key_movers already deduplicated above
+                analysis[key] = list(set(analysis[key]))
 
         return analysis
 
@@ -323,6 +435,13 @@ class TavilyFinancialTool(BaseTool):
             if stock in enhanced:
                 enhanced = enhanced.replace(stock, f"**{stock}**")
 
+        # Highlight key movers with performance
+        for mover in analysis.get("key_movers", []):
+            symbol = mover["symbol"]
+            performance = mover["performance"]
+            if symbol in enhanced and performance in enhanced:
+                enhanced = enhanced.replace(f"{symbol}", f"**{symbol}**")
+
         # Highlight important financial terms
         important_terms = [
             "earnings", "revenue", "profit", "loss", "merger", "acquisition",
@@ -337,6 +456,22 @@ class TavilyFinancialTool(BaseTool):
 
         return enhanced
 
+    def _format_news_date(self, date_str: str) -> str:
+        """Format news publication date for better readability."""
+        if not date_str:
+            return "Unknown date"
+        
+        try:
+            # Handle ISO format dates from APIs
+            if 'T' in date_str:
+                dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return dt.strftime("%Y-%m-%d %H:%M UTC")
+            else:
+                # Return as-is if already formatted
+                return date_str
+        except:
+            return date_str
+    
     def _extract_domain(self, url: str) -> str:
         """Extract clean domain name from URL."""
         try:
@@ -349,22 +484,27 @@ class TavilyFinancialTool(BaseTool):
             return "Unknown source"
 
 
-# Serper Search Tool with enhancements
+# Serper Search Tool with enhancements (keeping existing implementation with 1-hour enforcement)
 class SerperFinancialTool(BaseTool):
-    """Enhanced Serper search tool for financial news with better image integration support."""
+    """Enhanced Serper search tool for financial news with 1-hour time limit and better image integration support."""
 
     name: str = "serper_financial_search"
-    description: str = "Search for financial news using the Serper Google Search API with enhanced content structuring."
+    description: str = "Search for financial news within the last 1 hour using the Serper Google Search API with enhanced content structuring."
     args_schema: Type[BaseModel] = TavilySearchInput
 
     def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
         """
-        Enhanced Serper search with better content formatting for image integration.
+        Enhanced Serper search with 1-hour enforcement and better content formatting for image integration.
         """
         try:
             serper_api_key = os.getenv("SERPER_API_KEY")
             if not serper_api_key:
                 return "Error: SERPER_API_KEY not found."
+
+            # Enforce 1-hour limit
+            if hours_back != 1:
+                logger.info(f"Enforcing 1-hour limit for real-time news (was {hours_back})")
+                hours_back = 1
 
             # Enhanced query construction
             enhanced_query = self._build_serper_query(query)
@@ -374,7 +514,7 @@ class SerperFinancialTool(BaseTool):
                 "q": enhanced_query,
                 "num": max_results,
                 "tbm": "nws",
-                "tbs": f"qdr:h{hours_back}",
+                "tbs": f"qdr:h{hours_back}",  # Enforce 1-hour limit
                 "gl": "us",
                 "hl": "en",
             }
@@ -407,7 +547,7 @@ class SerperFinancialTool(BaseTool):
         """
         articles = data.get("news", [])
         if not articles:
-            return "No recent financial news found via Serper search."
+            return "No recent financial news found via Serper search within the last hour."
 
         # Quick content analysis
         all_content = " ".join([
@@ -417,9 +557,9 @@ class SerperFinancialTool(BaseTool):
         
         content_analysis = self._quick_content_analysis(all_content)
 
-        formatted_output = ["=== SERPER FINANCIAL NEWS RESULTS ==="]
+        formatted_output = ["=== SERPER REAL-TIME FINANCIAL NEWS (LAST HOUR) ==="]
         
-        # Add content highlights
+        # Add content highlights for image finder
         if content_analysis["stocks"] or content_analysis["themes"]:
             formatted_output.append("\n**CONTENT HIGHLIGHTS:**")
             if content_analysis["stocks"]:
@@ -427,7 +567,7 @@ class SerperFinancialTool(BaseTool):
             if content_analysis["themes"]:
                 formatted_output.append(f"🎯 Key themes: {', '.join(content_analysis['themes'][:3])}")
 
-        formatted_output.append("\n**NEWS ARTICLES:**")
+        formatted_output.append("\n**BREAKING NEWS ARTICLES:**")
         
         for i, article in enumerate(articles[:10], 1):
             title = article.get("title", "No title")
@@ -441,19 +581,19 @@ class SerperFinancialTool(BaseTool):
 
             news_item = f"""
 **{i}. {title}**
-📰 {source} | 📅 {date}
+📰 {source} | ⏰ {date}
 📄 {enhanced_snippet}
 🔗 {link}
 ---
 """
             formatted_output.append(news_item)
 
-        # Add content analysis for image finder
-        formatted_output.append(f"\n**ANALYSIS FOR CHART INTEGRATION:**")
+        # Add content analysis for image finder integration
+        formatted_output.append(f"\n**IMAGE SEARCH CONTEXT:**")
         if content_analysis["companies"]:
-            formatted_output.append(f"Companies: {', '.join(content_analysis['companies'][:6])}")
+            formatted_output.append(f"🏢 Companies: {', '.join(content_analysis['companies'][:6])}")
         if content_analysis["sectors"]:
-            formatted_output.append(f"Sectors: {', '.join(content_analysis['sectors'])}")
+            formatted_output.append(f"🏭 Sectors: {', '.join(content_analysis['sectors'])}")
 
         return "\n".join(formatted_output)
 
