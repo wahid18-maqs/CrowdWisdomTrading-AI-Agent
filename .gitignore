@@ -243,3 +243,5 @@ videos/
 !.env.template
 !config/*.template.yaml
 !config/example_*.yaml
+
+test_workflow.py

@@ -10,7 +10,6 @@ from .LLM_config import apply_rate_limiting
 # Set up logging for the crew module
 logger = logging.getLogger(__name__)
 
-
 class FinancialMarketCrew:
     """
     An enhanced CrewAI implementation for a financial news workflow.
@@ -130,8 +129,6 @@ class FinancialMarketCrew:
             logger.error(error_msg, exc_info=True)
             return {"status": "failed", "error": error_msg}
 
-    # --- Private Phase-specific Methods ---
-
     def _run_search_phase(self) -> str:
         """Executes the search phase of the workflow."""
         logger.info("--- Phase 1: Searching for News ---")
@@ -149,20 +146,24 @@ class FinancialMarketCrew:
         logger.info("--- Phase 2: Creating Summary ---")
         summary_agent = self.agents_factory.summary_agent()
         summary_task = Task(
-            description=f"""Analyze the following financial news and create a concise market summary under 500 words.
+            description=f"""Analyze the following financial news and create a concise market summary under 500 words, structured for Telegram.
 
 Financial News Data:
 {search_result}
 
 Structure your summary with:
-1. Market Overview (2-3 sentences)
-2. Key Movers (top stocks)
-3. Sector Analysis
-4. Economic Highlights
-5. Tomorrow's Watch
+1. Title (1 sentence summarizing the most significant news item)
+2. Source (e.g., Reuters, CNBC)
+3. Date (format: YYYY-MM-DD)
+4. Key Points (up to 5 bullet points, including stock movements and key events)
+5. Market Implications (up to 3 bullet points, focusing on broader market impacts)
 
-Use professional language and include specific figures.""",
-            expected_output="A professional, well-structured financial market summary under 500 words.",
+Requirements:
+- Use professional language and include specific figures (e.g., stock percentages, economic data).
+- Ensure bullet points are concise (10-200 characters each).
+- Avoid metadata like 'Key Stocks' or 'Key Themes'.
+- The title should be a key news headline (e.g., 'Apple shares rise 3% on strong iPhone 15 sales data').""",
+            expected_output="A concise financial market summary under 500 words, structured with a title, source, date, key points, and market implications.",
             agent=summary_agent
         )
         return self._run_task_with_retry([summary_agent], summary_task)
@@ -260,5 +261,3 @@ Use the telegram_sender tool with language='{lang}'.""",
 
         logger.info("--- Sending Phase Completed ---")
         return send_results
-    
-

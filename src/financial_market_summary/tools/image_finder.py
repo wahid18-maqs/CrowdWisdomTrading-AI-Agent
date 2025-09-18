@@ -225,6 +225,7 @@ class ImageFinder(BaseTool):
                 response = requests.post(url, json=payload, headers=headers, timeout=20)
                 response.raise_for_status()
                 data = response.json()
+                logger.debug(f"Serper API response: {data}")  # Added for debugging
 
                 # Process results
                 for img_data in data.get("images", []):

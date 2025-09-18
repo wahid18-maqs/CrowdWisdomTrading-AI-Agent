@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import logging
 from dotenv import load_dotenv
 import json
+import re  # Moved to top for efficiency
+from urllib.parse import urlparse  # Moved to top
 
 # Load environment variables
 load_dotenv()
@@ -227,7 +229,6 @@ class TavilyFinancialTool(BaseTool):
         content_lower = all_content.lower()
 
         # Extract stock symbols more intelligently
-        import re
         stock_pattern = r'\b([A-Z]{2,5})\b'
         potential_stocks = re.findall(stock_pattern, all_content)
         
@@ -331,7 +332,6 @@ class TavilyFinancialTool(BaseTool):
         for term in important_terms:
             if term.lower() in enhanced.lower():
                 # Case-insensitive replacement while preserving original case
-                import re
                 pattern = re.compile(re.escape(term), re.IGNORECASE)
                 enhanced = pattern.sub(f"**{term.title()}**", enhanced, count=1)
 
@@ -340,7 +340,6 @@ class TavilyFinancialTool(BaseTool):
     def _extract_domain(self, url: str) -> str:
         """Extract clean domain name from URL."""
         try:
-            from urllib.parse import urlparse
             domain = urlparse(url).netloc
             # Remove www. prefix if present
             if domain.startswith('www.'):
@@ -460,7 +459,6 @@ class SerperFinancialTool(BaseTool):
 
     def _quick_content_analysis(self, content: str) -> Dict[str, list]:
         """Quick analysis for Serper content."""
-        import re
         
         analysis = {
             "stocks": [],

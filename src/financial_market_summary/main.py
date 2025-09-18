@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from datetime import datetime
 from typing import Dict, Any
 
-
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH)
@@ -83,7 +82,7 @@ def run_financial_summary() -> Dict[str, Any]:
     quota_tier = check_api_quotas()
     
     try:
-        from .crew import FinancialMarketCrew
+        from financial_market_summary.crew_bot import FinancialMarketCrew
         
         logger.info("--- Starting Financial Market Summary Workflow ---")
         logger.info(f"Execution started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -232,9 +231,9 @@ if __name__ == "__main__":
         logger.info("Please check your API keys and the connection status logs above.")
         final_result = {"status": "failed", "error": "Insufficient API connections"}
     
-    # Saving the final result to a log file for later review
+    # Saving the final result to a JSON file in the output folder
     try:
-        output_dir = Path("logs")
+        output_dir = ROOT_DIR / "output"
         output_dir.mkdir(exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
