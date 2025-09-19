@@ -373,16 +373,14 @@ class EnhancedTelegramSender(BaseTool):
         return has_title and has_points and has_implications
 
     def _create_clean_message(self, data: Dict[str, Any], language: str) -> str:
-        """Create properly formatted Telegram message"""
+        """Create properly formatted Telegram message with live chart links."""
         
         title = self._clean_for_telegram(data.get("title", "Market Update"))
         
-        # Build message parts
         message_parts = []
         message_parts.append(f"<b>{title}</b>")
         message_parts.append("")
         
-        # Source with validation score
         source = data.get("source", "Financial News")
         source_url = data.get("source_url", "")
         validation_score = data.get("validation_score", 0)
@@ -398,7 +396,6 @@ class EnhancedTelegramSender(BaseTool):
         
         message_parts.append("")
         
-        # Key Points - GUARANTEED
         key_points = data.get("key_points", [])
         if key_points:
             message_parts.append("<b>Key Points:</b>")
@@ -408,22 +405,29 @@ class EnhancedTelegramSender(BaseTool):
         
         message_parts.append("")
         
-        # Market Implications - GUARANTEED
         implications = data.get("market_implications", [])
         if implications:
             message_parts.append("<b>Market Implications:</b>")
             for impl in implications[:3]:
                 clean_impl = self._clean_for_telegram(impl)
                 message_parts.append(f"• {clean_impl}")
+
+        # --- LIVE CHARTS SECTION ---
+        message_parts.append("")
+        message_parts.append("<b>Live Charts:</b>")
+        message_parts.append('🔗 📊 <a href="https://finance.yahoo.com/quote/%5EGSPC/chart/?guccounter=1">S&P 500 Chart</a>')
+        message_parts.append('🔗 📈 <a href="https://finance.yahoo.com/quote/%5EIXIC/chart/">NASDAQ Chart</a>')
+        message_parts.append('🔗 📉 <a href="https://finance.yahoo.com/quote/%5EDJI/chart/">Dow Jones Chart</a>')
+        message_parts.append('🔗 ⚡ <a href="https://finance.yahoo.com/quote/%5EVIX/chart/">VIX Chart</a>')
+        message_parts.append('🔗 🏛️ <a href="https://finance.yahoo.com/quote/%5ETNX/chart/">10-Year Chart</a>')
+        message_parts.append('🔗 💰 <a href="https://finance.yahoo.com/quote/GC%3DF/chart/">Gold Chart</a>')
         
         # Join message
         final_message = "\n".join(message_parts)
         
-        # RTL support
         if language.lower() in ["arabic", "ar"]:
             final_message = f"\u200F{final_message}"
         
-        # Final cleanup
         final_message = self._validate_html_structure(final_message)
         
         return final_message
