@@ -67,15 +67,32 @@ class TavilyFinancialTool(BaseTool):
                 "include_answer": True,
                 "include_raw_content": False,
                 "max_results": max_results,
+                
+                # EXPANDED INCLUDE DOMAINS - Matches the verification list
                 "include_domains": [
-                    "yahoo.com/finance",
-                    "marketwatch.com",
+                    # Tier 1 - Most reliable and accessible
+                    "finance.yahoo.com",
+                    "marketwatch.com", 
                     "investing.com",
                     "benzinga.com",
                     "cnbc.com",
+                    
+                    # Tier 2 - Major financial news
                     "reuters.com",
-                    "bloomberg.com"
+                    "nasdaq.com",
+                    "seekingalpha.com",
+                    "fool.com",
+                    "thestreet.com",
+                    "morningstar.com",
+                    "zacks.com",
+                    
+                    # Tier 3 - Premium sources (may have paywalls but still valid)
+                    "bloomberg.com",
+                    "wsj.com",
+                    "ft.com",
+                    "barrons.com"
                 ],
+                
                 "exclude_domains": ["reddit.com", "twitter.com", "facebook.com"],
                 "start_published_date": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "end_published_date": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
