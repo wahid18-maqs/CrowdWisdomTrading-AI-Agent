@@ -274,33 +274,23 @@ class EnhancedTelegramSender(BaseTool):
             return False
 
     def _create_message(self, data: Dict[str, Any], language: str) -> str:
-        """Create message following exact pattern: Title -> Source -> Date -> Key Points -> Market Implications"""
+        """Create simplified message: Catchy Title -> Key Points -> Market Implications ONLY"""
         
         title = self._escape_html(data.get("title", "Financial Market Update"))
-        source = self._escape_html(data.get("source", "Financial News"))
-        source_url = data.get("source_url", "")
-        date = data.get("date", "")
         
-        # Build message in exact order
-        message = f"<b>{title}</b>\n"
-        
-        if source_url:
-            message += f"Source: <a href=\"{source_url}\">{source}</a>\n"
-        else:
-            message += f"Source: {source}\n"
-        
-        if date:
-            message += f"Date: {date}\n"
+        # Build ultra-simple message format
+        message = f"<b>{title}</b>\n\n"
         
         # Key Points
         if data.get("key_points"):
-            message += "\n<b>Key Points:</b>\n"
+            message += "<b>Key Points:</b>\n"
             for point in data["key_points"]:
                 message += f"• {self._escape_html(point)}\n"
+            message += "\n"
         
         # Market Implications
         if data.get("market_implications"):
-            message += "\n<b>Market Implications:</b>\n"
+            message += "<b>Market Implications:</b>\n"
             for impl in data["market_implications"]:
                 message += f"• {self._escape_html(impl)}\n"
         

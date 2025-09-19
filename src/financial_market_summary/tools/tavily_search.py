@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 import logging
 from dotenv import load_dotenv
 import json
-import re  
-from urllib.parse import urlparse 
+import re  # Moved to top for efficiency
+from urllib.parse import urlparse  # Moved to top
 
 # Load environment variables
 load_dotenv()
@@ -88,17 +88,11 @@ class TavilyFinancialTool(BaseTool):
                 "include_raw_content": False,
                 "max_results": max_results,
                 "include_domains": [
-                    "bloomberg.com",
-                    "reuters.com", 
-                    "cnbc.com",
-                    "marketwatch.com",
                     "yahoo.com/finance",
+                    "marketwatch.com",
                     "investing.com",
                     "benzinga.com",
-                    "seekingalpha.com",
-                    "wsj.com",
-                    "forbes.com",
-                    "ft.com"
+                    "cnbc.com"
                 ],
                 "exclude_domains": ["reddit.com", "twitter.com", "facebook.com"],
                 "start_published_date": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),

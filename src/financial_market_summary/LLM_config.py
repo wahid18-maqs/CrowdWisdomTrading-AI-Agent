@@ -36,11 +36,11 @@ class APIRateLimiter:
         """Initialize rate limit configurations and validation tracking."""
         self.api_configs = {
             "gemini": RateLimitConfig(
-                requests_per_minute=15,  # Increased for validation calls
-                requests_per_hour=150,
-                delay_between_requests=4.0,
+                requests_per_minute=10,  # More conservative
+                requests_per_hour=100,
+                delay_between_requests=8.0,  # Longer delays
                 max_retries=5,
-                backoff_multiplier=2.0,
+                backoff_multiplier=2.5,  # Higher backoff
             ),
             "tavily": RateLimitConfig(
                 requests_per_minute=20,
