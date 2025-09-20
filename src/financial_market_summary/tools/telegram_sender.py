@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from crewai.tools import BaseTool
-from .image_finder import ImageFinder, ImageFinderInput
+from .image_finder import EnhancedImageFinderInput as ImageFinderInput
+from .image_finder import EnhancedImageFinder as ImageFinder
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ class TelegramSenderInput(BaseModel):
 
 class EnhancedTelegramSender(BaseTool):
     name: str = "telegram_sender"
-    description: str = "Sends formatted financial summaries with relevant charts to Telegram"
+    description: str = "Sends formatted financial summaries with verified sources and Telegram-compatible images"
     args_schema: Type[BaseModel] = TelegramSenderInput
     
     bot_token: Optional[str] = None
@@ -56,7 +57,7 @@ class EnhancedTelegramSender(BaseTool):
 
     def _run(self, content: str, language: str = "english") -> str:
         try:
-            # Parse content and create clean structure
+            # Parse content and create clean structure with verified source priority
             structured_data = self._extract_clean_content(content)
             
             # Debug: Show found article links
@@ -65,13 +66,13 @@ class EnhancedTelegramSender(BaseTool):
             if not self._has_valid_content(structured_data):
                 return "No valid financial content found"
             
-            # Find image
-            image_data = self._find_image(content, structured_data)
+            # Enhanced image finding with Telegram-compatible priority
+            image_data = self._find_telegram_compatible_image(content, structured_data)
             
             # Create clean message with proper structure
             message = self._create_clean_message(structured_data, language)
             
-            # Send content
+            # Send content with verified image
             result = self._send_content(message, image_data)
             
             return result
@@ -80,16 +81,36 @@ class EnhancedTelegramSender(BaseTool):
             return f"Error: {e}"
 
     def _extract_clean_content(self, content: str) -> Dict[str, Any]:
-        """Extract and clean content with robust parsing and article link validation"""
+        """Extract and clean content with verified source priority"""
         data = {
             "title": "",
             "source": "Financial News",
             "source_url": "",
             "key_points": [],
             "market_implications": [],
-            "article_links": [],
-            "validation_score": 0
+            "verified_source": None,
+            "verified_image": None,
+            "validation_score": 0,
+            "url_verified": False,
+            "image_verified": False
         }
+        
+        # FIRST: Look for verified source information from web search
+        verified_source = self._extract_verified_source_info(content)
+        if verified_source:
+            data["verified_source"] = verified_source
+            data["source"] = verified_source.get("title", "Financial News")
+            data["source_url"] = verified_source.get("url", "")
+            data["url_verified"] = verified_source.get("url_verified", False)
+            data["validation_score"] = verified_source.get("confidence_score", 0)
+            logger.info(f"✅ Using verified web source: {data['source_url']} (Verified: {data['url_verified']})")
+        
+        # SECOND: Look for verified image information from enhanced image search
+        verified_image = self._extract_verified_image_info(content)
+        if verified_image:
+            data["verified_image"] = verified_image
+            data["image_verified"] = verified_image.get("telegram_compatible", False)
+            logger.info(f"✅ Using verified image: {verified_image.get('title', 'Unknown')} (Telegram Compatible: {data['image_verified']})")
         
         # Clean HTML but preserve structure for parsing
         clean_content = re.sub(r'<[^>]+>', '', content)
@@ -104,7 +125,8 @@ class EnhancedTelegramSender(BaseTool):
             # Skip metadata lines
             if any(skip in line.upper() for skip in [
                 'SEARCH WINDOW', 'MARKET OVERVIEW', 'KEY HIGHLIGHTS', 'BREAKING NEWS',
-                'SEARCH METADATA', 'REAL-TIME', 'UTC', '===', 'PHASE'
+                'SEARCH METADATA', 'REAL-TIME', 'UTC', '===', 'PHASE', 'VERIFIED SOURCE',
+                'WEB SOURCE', 'CONFIDENCE', 'IMAGE SEARCH', 'VERIFIED IMAGES'
             ]):
                 continue
             
@@ -113,22 +135,11 @@ class EnhancedTelegramSender(BaseTool):
             # Look for substantial content that could be a title
             if 25 <= len(clean_line) <= 200 and not clean_line.startswith('•') and not title_found:
                 # Additional validation - should contain market-related terms
-                market_terms = ['market', 'stock', 'trading', 'earning', 'fed', 'economic', 'financial', 'sector']
+                market_terms = ['market', 'stock', 'trading', 'earning', 'fed', 'economic', 'financial', 'sector', 'rally', 'surge', 'high']
                 if any(term in clean_line.lower() for term in market_terms):
                     data["title"] = clean_line
                     title_found = True
                     break
-
-        # Extract article links with enhanced parsing
-        article_links_data = self._extract_validated_article_links(lines)
-        data["article_links"] = article_links_data["links"]
-        data["validation_score"] = article_links_data["score"]
-
-        # Select best source URL
-        if data["article_links"]:
-            best_article = max(data["article_links"], key=lambda x: x.get("score", 0))
-            data["source_url"] = best_article["url"]
-            data["source"] = best_article.get("title", best_article.get("source", "Financial News"))[:60] + "..."
 
         # Extract content sections with multiple approaches
         self._extract_content_sections(lines, data)
@@ -140,98 +151,186 @@ class EnhancedTelegramSender(BaseTool):
         if not data["market_implications"]:
             data["market_implications"] = self._generate_fallback_implications(content)
 
-        # Set defaults
+        # Set defaults ONLY if no verified source found
         data["title"] = data["title"] or "US Market Update"
-        if not data["source_url"]:
-            data["source_url"] = "https://www.marketwatch.com"
+        if not data["source_url"] and not data["verified_source"]:
+            data["source_url"] = "https://finance.yahoo.com"
+            data["source"] = "Yahoo Finance"
         
         return data
 
-    def _extract_validated_article_links(self, lines: List[str]) -> Dict[str, Any]:
-        """Enhanced article link extraction with multiple patterns"""
-        article_data = {"links": [], "score": 0}
-        
-        trusted_domains = {
-            'reuters.com': 95, 'bloomberg.com': 95, 'cnbc.com': 90,
-            'marketwatch.com': 85, 'investing.com': 80, 'benzinga.com': 75,
-            'yahoo.com': 70, 'wsj.com': 95, 'ft.com': 90
-        }
-        
-        current_article = None
-        
-        for i, line in enumerate(lines):
-            line_clean = line.strip()
+    def _extract_verified_source_info(self, content: str) -> Optional[Dict[str, Any]]:
+        """Extract verified source information from web search results"""
+        try:
+            # Look for JSON structure containing verified source data
+            json_pattern = r'\{[^}]*"main_source"[^}]*\}'
+            json_matches = re.findall(json_pattern, content, re.DOTALL)
             
-            # Multiple patterns for article detection
-            article_patterns = [
-                r'\*\*\d+\.\s*(.+?)\*\*',  # **1. Title**
-                r'^(\d+\.\s*.+?)$',        # 1. Title (without **)
-                r'#{1,3}\s*(.+?)$'         # ### Title
+            for json_str in json_matches:
+                try:
+                    # Try to parse the JSON
+                    source_data = json.loads(json_str)
+                    main_source = source_data.get("main_source", {})
+                    
+                    if main_source.get("url") and main_source.get("title"):
+                        logger.info(f"🔍 Found verified source JSON: {main_source.get('title')[:50]}...")
+                        return {
+                            "title": main_source.get("title", ""),
+                            "url": main_source.get("url", ""),
+                            "source": main_source.get("source", ""),
+                            "url_verified": main_source.get("url_verified", False),
+                            "confidence_score": source_data.get("confidence_score", 0),
+                            "verification_status": main_source.get("verification_status", "")
+                        }
+                except json.JSONDecodeError:
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error extracting verified source: {e}")
+            return None
+
+    def _extract_verified_image_info(self, content: str) -> Optional[Dict[str, Any]]:
+        """Extract verified image information from enhanced image search results"""
+        try:
+            # Look for JSON structure containing verified image data
+            image_patterns = [
+                r'\{[^}]*"verified_images"[^}]*\}',
+                r'\{[^}]*"telegram_compatible"[^}]*true[^}]*\}',
+                r'\{[^}]*"url"[^}]*"title"[^}]*\}'
             ]
             
-            for pattern in article_patterns:
-                match = re.search(pattern, line_clean)
-                if match:
-                    # Save previous article
-                    if current_article and current_article.get("url"):
-                        article_data["links"].append(current_article)
-                    
-                    # Start new article
-                    title = self._strip_all_formatting(match.group(1))
-                    current_article = {
-                        "title": title,
-                        "url": "",
-                        "source": "",
-                        "score": 0
-                    }
-                    break
-            
-            # Look for source and link information
-            if current_article:
-                if 'source:' in line_clean.lower():
-                    source_match = re.search(r'source:\s*(.+)', line_clean, re.IGNORECASE)
-                    if source_match:
-                        current_article["source"] = source_match.group(1).strip()
+            for pattern in image_patterns:
+                json_matches = re.findall(pattern, content, re.DOTALL)
                 
-                # Enhanced link detection
-                link_patterns = [
-                    r'🔗\s*link:\s*(https?://[^\s]+)',
-                    r'🔗\s*(https?://[^\s]+)',
-                    r'link:\s*(https?://[^\s]+)',
-                    r'(https?://[^\s]+)'
-                ]
-                
-                for link_pattern in link_patterns:
-                    url_match = re.search(link_pattern, line_clean, re.IGNORECASE)
-                    if url_match:
-                        url = url_match.group(1)
-                        current_article["url"] = url
+                for json_str in json_matches:
+                    try:
+                        # Try to parse the JSON
+                        image_data = json.loads(json_str)
                         
-                        # Score the article
-                        for domain, score in trusted_domains.items():
-                            if domain in url.lower():
-                                current_article["score"] = score
-                                break
-                        else:
-                            current_article["score"] = 50
-                        break
+                        # Check for verified_images array
+                        if 'verified_images' in image_data:
+                            verified_images = image_data.get('verified_images', [])
+                            if verified_images:
+                                # Get the first Telegram-compatible image
+                                for image in verified_images:
+                                    if image.get('telegram_compatible', False):
+                                        logger.info(f"🖼️ Found Telegram-compatible image: {image.get('title', 'Unknown')[:50]}...")
+                                        return image
+                        
+                        # Check for single image object
+                        elif image_data.get('url') and image_data.get('telegram_compatible', False):
+                            logger.info(f"🖼️ Found single Telegram-compatible image: {image_data.get('title')[:50]}...")
+                            return image_data
+                                
+                    except json.JSONDecodeError:
+                        continue
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error extracting verified image: {e}")
+            return None
+
+    def _find_telegram_compatible_image(self, original_content: str, structured_data: Dict[str, Any]) -> Dict[str, str]:
+        """Find Telegram-compatible image with priority system"""
         
-        # Don't forget the last article
-        if current_article and current_article.get("url"):
-            article_data["links"].append(current_article)
+        # FIRST PRIORITY: Use verified Telegram-compatible image if available
+        verified_image = structured_data.get("verified_image")
+        if verified_image and verified_image.get("telegram_compatible", False):
+            logger.info(f"🖼️ Using verified Telegram-compatible image: {verified_image.get('title', 'Unknown')}")
+            return {
+                "url": verified_image.get("url", ""),
+                "title": verified_image.get("title", "Financial Chart"),
+                "source": f"Verified {verified_image.get('source', 'Source')}",
+                "telegram_compatible": True,
+                "stock_symbol": verified_image.get("stock_symbol", ""),
+                "type": verified_image.get("type", "chart")
+            }
         
-        # Calculate overall score
-        if article_data["links"]:
-            scores = [article.get("score", 0) for article in article_data["links"]]
-            article_data["score"] = min(100, sum(scores) // len(scores))
+        # SECOND PRIORITY: Use Enhanced Image Finder for Telegram-compatible images
+        try:
+            search_parts = []
+            if structured_data.get("title"):
+                search_parts.append(structured_data["title"])
+            if structured_data.get("key_points"):
+                search_parts.extend(structured_data["key_points"][:2])
+            
+            search_content = " ".join(search_parts)[:500]
+            stocks = self._extract_stock_symbols(original_content)
+            
+            image_input = ImageFinderInput(
+                search_content=search_content, 
+                mentioned_stocks=stocks,
+                max_images=3
+            )
+            results_json = self.image_finder._run(**image_input.dict())
+            
+            if results_json:
+                images = json.loads(results_json) if isinstance(results_json, str) else results_json
+                if isinstance(images, list) and images:
+                    # Find first Telegram-compatible image
+                    for image in images:
+                        if image.get('telegram_compatible', False):
+                            logger.info(f"🖼️ Using Telegram-compatible image from finder: {image.get('title', 'Unknown')}")
+                            return {
+                                "url": image["url"],
+                                "title": image.get("title", "Financial Chart"),
+                                "source": "Enhanced Image Finder",
+                                "telegram_compatible": True,
+                                "type": "finder_result"
+                            }
+                    
+                    # If no Telegram-compatible images found, log this
+                    logger.warning("❌ No Telegram-compatible images found in image finder results")
+                    for image in images:
+                        logger.debug(f"   - {image.get('title', 'Unknown')}: telegram_compatible={image.get('telegram_compatible', False)}")
         
-        # Filter high-quality links
-        article_data["links"] = [
-            article for article in article_data["links"] 
-            if article.get("score", 0) >= 60 and article.get("url")
-        ]
-        
-        return article_data
+        except Exception as e:
+            logger.warning(f"Enhanced ImageFinder failed: {e}")
+
+        # THIRD PRIORITY: Create stock-specific placeholder if stocks mentioned
+        stocks = self._extract_stock_symbols(original_content)
+        if stocks:
+            primary_stock = stocks[0]
+            stock_placeholder = self._create_stock_placeholder(primary_stock)
+            logger.info(f"🖼️ Using stock-specific placeholder for {primary_stock}")
+            return stock_placeholder
+
+        # FALLBACK: Telegram-compatible general placeholder
+        logger.info("🖼️ Using general market placeholder image")
+        return self._get_telegram_compatible_fallback()
+
+    def _create_stock_placeholder(self, stock_symbol: str) -> Dict[str, str]:
+        """Create a stock-specific placeholder image"""
+        placeholder_url = f"https://via.placeholder.com/800x600/1f77b4/ffffff?text={stock_symbol}+Stock+Chart"
+        return {
+            "url": placeholder_url,
+            "title": f"{stock_symbol} Stock Chart",
+            "source": "Stock Placeholder",
+            "telegram_compatible": True,
+            "stock_symbol": stock_symbol,
+            "type": "stock_placeholder"
+        }
+
+    def _get_telegram_compatible_fallback(self) -> Dict[str, str]:
+        """Get guaranteed Telegram-compatible fallback image"""
+        placeholder_url = "https://via.placeholder.com/800x600/2ca02c/ffffff?text=Stock+Market+Update"
+        return {
+            "url": placeholder_url,
+            "title": "Stock Market Update Chart",
+            "source": "Market Placeholder",
+            "telegram_compatible": True,
+            "type": "market_placeholder"
+        }
+
+    def _extract_stock_symbols(self, content: str) -> List[str]:
+        """Extract stock symbols from content"""
+        stocks = re.findall(r'\b([A-Z]{2,5})\b', content)
+        major_stocks = {"AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "FDX", "INTC", "AMD"}
+        relevant_stocks = [s for s in stocks if s in major_stocks]
+        return list(set(relevant_stocks))[:3]
 
     def _extract_content_sections(self, lines: List[str], data: Dict[str, Any]):
         """Extract key points and market implications with multiple approaches"""
@@ -269,24 +368,38 @@ class EnhancedTelegramSender(BaseTool):
                     break
 
     def _debug_article_links(self, data: Dict[str, Any]) -> None:
-        """Debug method to show found article links"""
-        article_links = data.get("article_links", [])
+        """Debug method to show found article links and images"""
+        verified_source = data.get("verified_source")
+        verified_image = data.get("verified_image")
         validation_score = data.get("validation_score", 0)
+        url_verified = data.get("url_verified", False)
+        image_verified = data.get("image_verified", False)
         
-        logger.info("=== ARTICLE LINKS DEBUG ===")
+        logger.info("=== SOURCE & IMAGE DEBUG ===")
+        logger.info(f"Source Verification Status: {url_verified}")
+        logger.info(f"Image Telegram Compatible: {image_verified}")
         logger.info(f"Validation Score: {validation_score}/100")
-        logger.info(f"Articles Found: {len(article_links)}")
         
-        for i, article in enumerate(article_links, 1):
-            logger.info(f"  {i}. Title: {article.get('title', 'N/A')[:50]}...")
-            logger.info(f"     Source: {article.get('source', 'N/A')}")
-            logger.info(f"     URL: {article.get('url', 'N/A')}")
-            logger.info(f"     Score: {article.get('score', 0)}/100")
-            logger.info("     ---")
+        if verified_source:
+            logger.info("VERIFIED SOURCE FOUND:")
+            logger.info(f"  Title: {verified_source.get('title', 'N/A')[:50]}...")
+            logger.info(f"  Source: {verified_source.get('source', 'N/A')}")
+            logger.info(f"  URL: {verified_source.get('url', 'N/A')}")
+            logger.info(f"  Verified: {verified_source.get('url_verified', False)}")
+            logger.info(f"  Confidence: {verified_source.get('confidence_score', 0)}/100")
+        else:
+            logger.info("NO VERIFIED SOURCE - Using fallback")
+            logger.info(f"Fallback URL: {data.get('source_url', 'N/A')}")
         
-        if article_links:
-            main_url = data.get("source_url", "")
-            logger.info(f"Selected Main Source: {main_url}")
+        if verified_image:
+            logger.info("VERIFIED IMAGE FOUND:")
+            logger.info(f"  Title: {verified_image.get('title', 'N/A')}")
+            logger.info(f"  URL: {verified_image.get('url', 'N/A')}")
+            logger.info(f"  Source: {verified_image.get('source', 'N/A')}")
+            logger.info(f"  Telegram Compatible: {verified_image.get('telegram_compatible', False)}")
+            logger.info(f"  Stock: {verified_image.get('stock_symbol', 'N/A')}")
+        else:
+            logger.info("NO VERIFIED IMAGE - Will use Telegram-compatible placeholder")
         
         logger.info("=== END DEBUG ===")
 
@@ -309,7 +422,7 @@ class EnhancedTelegramSender(BaseTool):
 
     def _is_metadata(self, text: str) -> bool:
         """Check if text is metadata"""
-        metadata_terms = ['search', 'metadata', 'completed', 'results', 'hours', 'utc', 'total']
+        metadata_terms = ['search', 'metadata', 'completed', 'results', 'hours', 'utc', 'total', 'verification', 'confidence', 'image search']
         return any(term in text.lower() for term in metadata_terms)
 
     def _generate_fallback_points(self, content: str) -> List[str]:
@@ -318,7 +431,7 @@ class EnhancedTelegramSender(BaseTool):
         
         # Extract stock mentions
         stocks = re.findall(r'\b([A-Z]{2,5})\b', content)
-        major_stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "FDX", "ADSK"]
+        major_stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "FDX", "INTC", "ADSK"]
         relevant_stocks = [s for s in stocks if s in major_stocks]
         
         if relevant_stocks:
@@ -350,7 +463,7 @@ class EnhancedTelegramSender(BaseTool):
         if 'fed' in content.lower():
             implications.append("Fed policy decisions remain crucial for market direction")
         
-        if 'technology' in content.lower() or any(stock in content for stock in ['NVDA', 'AAPL', 'MSFT']):
+        if 'technology' in content.lower() or any(stock in content for stock in ['NVDA', 'AAPL', 'MSFT', 'INTC']):
             implications.append("Technology sector developments significantly impact broader market sentiment")
         
         # Default fallbacks
@@ -373,7 +486,7 @@ class EnhancedTelegramSender(BaseTool):
         return has_title and has_points and has_implications
 
     def _create_clean_message(self, data: Dict[str, Any], language: str) -> str:
-        """Create properly formatted Telegram message with live chart links."""
+        """Create properly formatted Telegram message with verified source and live chart links."""
         
         title = self._clean_for_telegram(data.get("title", "Market Update"))
         
@@ -381,18 +494,44 @@ class EnhancedTelegramSender(BaseTool):
         message_parts.append(f"<b>{title}</b>")
         message_parts.append("")
         
-        source = data.get("source", "Financial News")
-        source_url = data.get("source_url", "")
-        validation_score = data.get("validation_score", 0)
-        
-        if source_url and source_url.startswith("http"):
-            if validation_score > 0:
-                source_line = f"<b>Source:</b> <a href=\"{source_url}\">{self._clean_for_telegram(source)}</a> (Score: {validation_score}/100)"
+        # Use verified source information
+        verified_source = data.get("verified_source")
+        if verified_source:
+            source_title = verified_source.get("title", "Financial News")
+            source_url = verified_source.get("url", "")
+            source_name = verified_source.get("source", "")
+            url_verified = verified_source.get("url_verified", False)
+            
+            # Create verification indicator
+            if url_verified:
+                verification_icon = " ✅"
             else:
-                source_line = f"<b>Source:</b> <a href=\"{source_url}\">{self._clean_for_telegram(source)}</a>"
-            message_parts.append(source_line)
+                verification_icon = " ⚠️"
+            
+            if source_url and source_url.startswith("http"):
+                # Format: [Title - Source](URL) ✅
+                clean_title = self._clean_for_telegram(source_title)
+                clean_source = self._clean_for_telegram(source_name)
+                if clean_source and clean_source not in clean_title:
+                    display_text = f"{clean_title} - {clean_source}"
+                else:
+                    display_text = clean_title
+                
+                source_line = f"<b>Source:</b> <a href=\"{source_url}\">{display_text}</a>{verification_icon}"
+                message_parts.append(source_line)
+            else:
+                source_line = f"<b>Source:</b> {self._clean_for_telegram(source_title)}{verification_icon}"
+                message_parts.append(source_line)
         else:
-            message_parts.append(f"<b>Source:</b> {self._clean_for_telegram(source)}")
+            # Fallback source handling
+            source = data.get("source", "Financial News")
+            source_url = data.get("source_url", "")
+            
+            if source_url and source_url.startswith("http"):
+                source_line = f"<b>Source:</b> <a href=\"{source_url}\">{self._clean_for_telegram(source)}</a>"
+                message_parts.append(source_line)
+            else:
+                message_parts.append(f"<b>Source:</b> {self._clean_for_telegram(source)}")
         
         message_parts.append("")
         
@@ -421,6 +560,26 @@ class EnhancedTelegramSender(BaseTool):
         message_parts.append('🔗 ⚡ <a href="https://finance.yahoo.com/quote/%5EVIX/chart/">VIX Chart</a>')
         message_parts.append('🔗 🏛️ <a href="https://finance.yahoo.com/quote/%5ETNX/chart/">10-Year Chart</a>')
         message_parts.append('🔗 💰 <a href="https://finance.yahoo.com/quote/GC%3DF/chart/">Gold Chart</a>')
+        
+        # Add confidence footer with image verification status
+        validation_score = data.get("validation_score", 0)
+        url_verified = data.get("url_verified", False)
+        image_verified = data.get("image_verified", False)
+        
+        if validation_score > 0 or url_verified or image_verified:
+            message_parts.append("")
+            footer_parts = []
+            if validation_score > 0:
+                footer_parts.append(f"📊 Confidence: {validation_score}/100")
+            if url_verified:
+                footer_parts.append("🔗 URL Verified ✅")
+            else:
+                footer_parts.append("🔗 Fallback Source ⚠️")
+            if image_verified:
+                footer_parts.append("📸 Image Compatible ✅")
+            
+            footer = " | ".join(footer_parts)
+            message_parts.append(f"<b>{footer}</b>")
         
         # Join message
         final_message = "\n".join(message_parts)
@@ -461,119 +620,126 @@ class EnhancedTelegramSender(BaseTool):
         
         return message
 
-    def _find_image(self, original_content: str, structured_data: Dict[str, Any]) -> Dict[str, str]:
-        """Find contextual image"""
-        try:
-            search_parts = []
-            if structured_data.get("title"):
-                search_parts.append(structured_data["title"])
-            if structured_data.get("key_points"):
-                search_parts.extend(structured_data["key_points"][:2])
-            
-            search_content = " ".join(search_parts)[:500]
-            
-            image_input = ImageFinderInput(search_content=search_content, max_images=2)
-            results_json = self.image_finder._run(**image_input.dict())
-            
-            if results_json:
-                images = json.loads(results_json) if isinstance(results_json, str) else results_json
-                if isinstance(images, list) and images:
-                    best_image = self._select_best_image(images, structured_data)
-                    if best_image and self._validate_image(best_image.get("url", "")):
-                        return {
-                            "url": best_image["url"],
-                            "title": best_image.get("title", "Financial Chart"),
-                            "source": "ImageFinder"
-                        }
-        except Exception as e:
-            logger.debug(f"ImageFinder failed: {e}")
-
-        return self._get_fallback_image(structured_data)
-
-    def _select_best_image(self, images: List[Dict], structured_data: Dict[str, Any]) -> Optional[Dict]:
-        """Select best image"""
-        if not images:
-            return None
-        
-        best_image = None
-        best_score = 0
-        
-        for image in images:
-            score = image.get('relevance_score', 0)
-            if score > best_score:
-                best_score = score
-                best_image = image
-        
-        return best_image
-
-    def _get_fallback_image(self, data: Dict[str, Any]) -> Dict[str, str]:
-        """Get fallback chart"""
-        market_chart_url = "https://chart.yahoo.com/z?s=%5EGSPC&t=1d&q=l&l=on&z=s&p=s"
-        return {
-            "url": market_chart_url,
-            "title": "S&P 500 Chart",
-            "source": "Yahoo Finance"
-        }
-
-    def _validate_image(self, url: str) -> bool:
-        """Validate image URL"""
-        if not url or not url.startswith("http"):
-            return False
-        
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.head(url, headers=headers, timeout=5)
-            return response.status_code == 200
-        except:
-            return False
-
     def _send_content(self, message: str, image_data: Dict[str, str]) -> str:
-        """Send content to Telegram"""
-        # Try image first
-        if image_data and image_data.get("url"):
-            if self._send_photo(image_data["url"], message):
-                return f"Message with image sent successfully (source: {image_data.get('source', 'unknown')})"
+        """Send content to Telegram with enhanced image handling"""
+        # Try verified image first
+        if image_data and image_data.get("url") and image_data.get("telegram_compatible", False):
+            image_url = image_data["url"]
+            image_title = image_data.get("title", "Financial Chart")
+            
+            logger.info(f"🖼️ Attempting to send Telegram-compatible image: {image_title}")
+            
+            if self._send_photo(image_url, message):
+                logger.info(f"✅ Photo sent successfully: {image_title}")
+                return f"Message with verified image sent successfully - {image_title}"
             else:
-                logger.warning("Photo send failed, trying text-only")
+                logger.warning(f"❌ Photo send failed for: {image_title}")
+        else:
+            if image_data:
+                logger.warning(f"❌ Image not Telegram-compatible: {image_data.get('title', 'Unknown')} (Compatible: {image_data.get('telegram_compatible', False)})")
         
-        # Send text
+        # Send text-only if image failed
         if self._send_message(message):
-            return "Text message sent successfully"
+            return "Text message sent successfully with verified source (image failed or not compatible)"
         
         return "Failed to send message"
 
     def _send_photo(self, image_url: str, caption: str) -> bool:
-        """Send photo to Telegram"""
+        """Send photo to Telegram with enhanced error handling"""
         try:
+            # Test if image URL is accessible first
+            if not self._test_image_accessibility(image_url):
+                logger.warning(f"Image URL not accessible, skipping photo send: {image_url}")
+                return False
+            
             payload = {
                 "chat_id": self.chat_id,
                 "photo": image_url,
-                "caption": caption[:1024],
+                "caption": caption[:1024],  # Telegram caption limit
                 "parse_mode": "HTML"
             }
             
             response = requests.post(f"{self.base_url}/sendPhoto", json=payload, timeout=30)
-            return response.ok and response.json().get("ok", False)
+            
+            if response.ok:
+                response_data = response.json()
+                if response_data.get("ok", False):
+                    logger.info(f"✅ Telegram photo sent successfully")
+                    return True
+                else:
+                    error_description = response_data.get('description', 'Unknown error')
+                    logger.error(f"❌ Telegram photo send failed: {error_description}")
+                    return False
+            else:
+                logger.error(f"❌ Telegram photo send HTTP error: {response.status_code} - {response.text}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"⏱️ Telegram photo send timeout for URL: {image_url}")
+            return False
+        except requests.exceptions.ConnectionError:
+            logger.error(f"🔌 Telegram photo send connection error for URL: {image_url}")
+            return False
         except Exception as e:
-            logger.warning(f"Photo send failed: {e}")
+            logger.error(f"❌ Telegram photo send unexpected error: {e}")
+            return False
+
+    def _test_image_accessibility(self, url: str) -> bool:
+        """Test if image URL is accessible"""
+        try:
+            headers = {
+                'User-Agent': 'TelegramBot (like TwitterBot)',
+                'Accept': 'image/*,*/*;q=0.8'
+            }
+            response = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
+            
+            if response.status_code == 200:
+                content_type = response.headers.get('content-type', '').lower()
+                if any(img_type in content_type for img_type in ['image/', 'png', 'jpeg', 'jpg', 'gif']):
+                    logger.info(f"✅ Image URL accessible and valid: {url}")
+                    return True
+                else:
+                    logger.warning(f"❌ URL not an image: {url} (Content-Type: {content_type})")
+                    return False
+            else:
+                logger.warning(f"❌ Image URL not accessible: {url} (Status: {response.status_code})")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"❌ Error testing image accessibility: {url} - {e}")
             return False
 
     def _send_message(self, message: str) -> bool:
-        """Send text message to Telegram"""
+        """Send text message to Telegram with enhanced error handling"""
         try:
             payload = {
                 "chat_id": self.chat_id,
-                "text": message[:4096],
-                "parse_mode": "HTML"
+                "text": message[:4096],  # Telegram message limit
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False  # Allow previews for source links
             }
             
             response = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=30)
-            success = response.ok and response.json().get("ok", False)
             
-            if not success:
-                logger.error(f"Telegram send failed: {response.text}")
-            
-            return success
+            if response.ok:
+                response_data = response.json()
+                if response_data.get("ok", False):
+                    logger.info(f"✅ Telegram text message sent successfully")
+                    return True
+                else:
+                    error_description = response_data.get('description', 'Unknown error')
+                    logger.error(f"❌ Telegram message send failed: {error_description}")
+                    return False
+            else:
+                logger.error(f"❌ Telegram message send HTTP error: {response.status_code} - {response.text}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"⏱️ Telegram message send timeout")
+            return False
+        except requests.exceptions.ConnectionError:
+            logger.error(f"🔌 Telegram message send connection error")
+            return False
         except Exception as e:
-            logger.warning(f"Message send failed: {e}")
+            logger.error(f"❌ Telegram message send unexpected error: {e}")
             return False
