@@ -411,24 +411,21 @@ class FinancialMarketCrew:
         return ' '.join(query_parts)
 
     def _web_search_fallback(self, title: str, themes: List[str], stocks: List[str]) -> Dict[str, Any]:
-        """Fallback when web search agent fails."""
-        # Create a simpler search query and try manual search
-        simple_query = ' '.join(title.split()[:6])  # First 6 words of title
-        
+        """Simple fallback when web search fails."""
         return {
             "main_source": {
-                "title": f"Financial News: {title[:50]}...",
-                "url": "https://finance.yahoo.com",
-                "source": "Yahoo Finance",
+                "title": "Financial News",
+                "url": "",
+                "source": "News Source",
                 "published": "Recent",
-                "relevance_score": 50,
-                "match_explanation": "Fallback source - web search failed",
-                "url_verified": True,
-                "verification_status": "fallback_verified"
+                "relevance_score": 0,
+                "match_explanation": "Search failed",
+                "url_verified": False,
+                "verification_status": "failed"
             },
-            "search_query_used": simple_query,
+            "search_query_used": "",
             "total_results_found": 0,
-            "confidence_score": 50
+            "confidence_score": 0
         }
 
     def _extract_summary_title(self, summary: str) -> str:
@@ -501,60 +498,20 @@ class FinancialMarketCrew:
             return self._get_fallback_image()
 
     def _image_search_fallback(self, title: str, stocks: List[str]) -> Dict[str, Any]:
-        """Fallback when image search fails"""
-        fallback_images = []
-        
-        # S&P 500 chart (always reliable)
-        fallback_images.append({
-            "url": "https://chart.yahoo.com/z?s=%5EGSPC&t=1d&q=l&l=on&z=s&p=s",
-            "title": "S&P 500 Market Chart",
-            "source": "Yahoo Finance",
-            "type": "market_index",
-            "relevance_score": 70,
-            "url_verified": True,
-            "verification_status": "fallback_reliable"
-        })
-        
-        # Add stock-specific chart if stocks mentioned
-        if stocks:
-            primary_stock = stocks[0]
-            fallback_images.append({
-                "url": f"https://chart.yahoo.com/z?s={primary_stock}&t=1d&q=l&l=on&z=s&p=s",
-                "title": f"{primary_stock} Stock Chart",
-                "source": "Yahoo Finance",
-                "type": "stock_chart",
-                "stock_symbol": primary_stock,
-                "relevance_score": 75,
-                "url_verified": True,
-                "verification_status": "fallback_reliable"
-            })
-        
+        """Simple fallback when image search fails"""
         return {
-            "verified_images": fallback_images,
-            "search_strategy_used": "Fallback strategy - reliable charts",
-            "total_images_found": len(fallback_images),
-            "verified_count": len(fallback_images),
-            "confidence_score": 60,
-            "verification_rate": 100,
-            "fallback_used": True
+            "verified_images": [],
+            "search_strategy_used": "No fallback",
+            "total_images_found": 0,
+            "verified_count": 0,
+            "confidence_score": 0,
+            "verification_rate": 0,
+            "fallback_used": False
         }
 
     def _get_fallback_image(self) -> Dict[str, Any]:
-        """Get single fallback image"""
-        return {
-            "url": "https://chart.yahoo.com/z?s=%5EGSPC&t=1d&q=l&l=on&z=s&p=s",
-            "title": "S&P 500 Market Chart",
-            "source": "Yahoo Finance",
-            "type": "fallback_market",
-            "relevance_score": 60,
-            "url_verified": True,
-            "verification_status": "fallback_reliable",
-            "fallback_used": True
-        }
-        """Extract stock symbols mentioned in summary."""
-        stocks = re.findall(r'\b([A-Z]{2,5})\b', summary)
-        major_stocks = {'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'TSLA', 'NVDA', 'META', 'FDX', 'INTC'}
-        return [stock for stock in stocks if stock in major_stocks]
+        """No fallback image"""
+        return None
 
     def _run_task_with_retry(self, agents: List[Agent], task: Task, max_retries: int = 3) -> str:
         """Run task with enhanced error handling for empty LLM responses."""

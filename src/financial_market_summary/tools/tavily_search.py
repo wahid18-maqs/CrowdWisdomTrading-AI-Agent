@@ -38,6 +38,15 @@ class TavilyFinancialTool(BaseTool):
     )
     args_schema: Type[BaseModel] = TavilySearchInput
 
+    def _get_allowed_domains(self) -> list:
+        """Get only the allowed domains for news extraction - no fallbacks."""
+        domains = os.getenv("ALLOWED_DOMAINS", "").strip()
+        if domains:
+            return [domain.strip() for domain in domains.split(",") if domain.strip()]
+        else:
+            # Default minimal set if no domains specified
+            return ["finance.yahoo.com", "marketwatch.com", "cnbc.com"]
+
     def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
         """
         Executes financial news search with enhanced content structure and source links.
@@ -68,30 +77,8 @@ class TavilyFinancialTool(BaseTool):
                 "include_raw_content": False,
                 "max_results": max_results,
                 
-                # EXPANDED INCLUDE DOMAINS - Matches the verification list
-                "include_domains": [
-                    # Tier 1 - Most reliable and accessible
-                    "finance.yahoo.com",
-                    "marketwatch.com", 
-                    "investing.com",
-                    "benzinga.com",
-                    "cnbc.com",
-                    
-                    # Tier 2 - Major financial news
-                    "reuters.com",
-                    "nasdaq.com",
-                    "seekingalpha.com",
-                    "fool.com",
-                    "thestreet.com",
-                    "morningstar.com",
-                    "zacks.com",
-                    
-                    # Tier 3 - Premium sources (may have paywalls but still valid)
-                    "bloomberg.com",
-                    "wsj.com",
-                    "ft.com",
-                    "barrons.com"
-                ],
+                # ONLY SPECIFIED DOMAINS - No fallbacks
+                "include_domains": self._get_allowed_domains(),
                 
                 "exclude_domains": ["reddit.com", "twitter.com", "facebook.com"],
                 "start_published_date": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -107,18 +94,8 @@ class TavilyFinancialTool(BaseTool):
             filtered_results = self._filter_results_by_time(data.get('results', []), start_time, end_time)
             
             if not filtered_results:
-                logger.warning("No results in 1 hour, expanding to 2 hours...")
-                # Expand to 2 hours if no results
-                start_time = end_time - timedelta(hours=2)
-                payload["start_published_date"] = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-                
-                response = requests.post(url, json=payload, timeout=30)
-                response.raise_for_status()
-                data = response.json()
-                filtered_results = data.get('results', [])
-                
-                if filtered_results:
-                    logger.info(f"Expanded search found {len(filtered_results)} results")
+                logger.warning("No results found in specified domains within 1 hour")
+                return "No financial news found in specified domains within the search timeframe."
             
             # Update data with filtered results
             data['results'] = filtered_results

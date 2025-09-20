@@ -72,15 +72,12 @@ class MultiLanguageTranslator(BaseTool):
             if target_language.lower() not in supported_languages:
                 return f"Error: Unsupported language '{target_language}'. Supported languages are: {', '.join(supported_languages)}"
 
-            processed_text, preserved_elements = self._preprocess_text(text)
+            processed_text, _ = self._preprocess_text(text)
             translated_result = self._translate_with_retry(processed_text, target_language)
 
             if not translated_result.startswith("Error:"):
-                final_result = self._restore_preserved_elements(
-                    translated_result, preserved_elements
-                )
                 logger.info(f"Successfully translated to {target_language}.")
-                return final_result
+                return translated_result
             else:
                 return translated_result
 
@@ -90,35 +87,8 @@ class MultiLanguageTranslator(BaseTool):
             return error_msg
     
     def _preprocess_text(self, text: str) -> tuple[str, Dict[str, str]]:
-        """
-        Replaces financial elements with unique placeholders.
-        """
-        preserved_elements = {}
-        processed_text = text
-
-        patterns = {
-            "stock_symbols": r"\b[A-Z]{2,5}\b",
-            "currency_values": r"\$[\d,]+\.?\d*",
-            "percentages": r"[\d,]+\.?\d*%"
-        }
-
-        for i, (key, pattern) in enumerate(patterns.items()):
-            matches = re.findall(pattern, processed_text)
-            for j, match in enumerate(matches):
-                placeholder = f"__PRESERVED_{key.upper()}_{i}_{j}__"
-                preserved_elements[placeholder] = match
-                processed_text = processed_text.replace(match, placeholder, 1)
-
-        return processed_text, preserved_elements
-
-    def _restore_preserved_elements(
-        self, translated_text: str, preserved_elements: Dict[str, str]
-    ) -> str:
-        """Replaces placeholders in the translated text with their original values."""
-        result = translated_text
-        for placeholder, original_value in preserved_elements.items():
-            result = result.replace(placeholder, original_value)
-        return result
+        """Simple preprocessing - no complex Unicode handling."""
+        return text, {}
 
     def _translate_with_retry(self, text: str, target_language: str) -> str:
         """
@@ -168,11 +138,11 @@ class MultiLanguageTranslator(BaseTool):
             target_lang_name = language_codes[target_language.lower()]
             system_prompt = f"""You are a professional financial translator. Translate to {target_lang_name}.
 RULES:
-1. Keep stock symbols unchanged (e.g., AAPL, MSFT).
-2. Preserve numbers, percentages, and currency values exactly as they are.
-3. Maintain any markdown formatting (e.g., **, *, #).
-4. Use professional financial terms.
-5. If necessary, keep important English financial terms in parentheses."""
+1. Translate the text simply and directly.
+2. Use professional financial terms.
+3. Keep stock symbols in English (AAPL, MSFT, etc.).
+4. Keep numbers and percentages unchanged.
+5. Keep the translation clear and easy to understand."""
             user_prompt = f"Translate this financial content to {target_lang_name}:\n\n{text}"
             messages = [
                 SystemMessage(content=system_prompt),

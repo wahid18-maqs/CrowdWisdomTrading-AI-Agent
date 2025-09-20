@@ -23,7 +23,7 @@ class EnhancedTelegramSender(BaseTool):
     name: str = "telegram_sender"
     description: str = "Sends formatted financial summaries with verified sources and Telegram-compatible images"
     args_schema: Type[BaseModel] = TelegramSenderInput
-    
+
     bot_token: Optional[str] = None
     chat_id: Optional[str] = None
     base_url: Optional[str] = None
@@ -33,13 +33,13 @@ class EnhancedTelegramSender(BaseTool):
         super().__init__(**kwargs)
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        
+
         if not self.bot_token or not self.chat_id:
             raise ValueError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
-        
+
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
         self.image_finder = ImageFinder()
-        
+
         if not self._test_credentials():
             raise ValueError("Invalid Telegram credentials")
 
@@ -57,28 +57,72 @@ class EnhancedTelegramSender(BaseTool):
 
     def _run(self, content: str, language: str = "english") -> str:
         try:
+            # For Hindi, Arabic, Hebrew - just send content directly from translator
+            if language.lower() in ["hindi", "arabic", "hebrew"]:
+                logger.info(f"📤 Sending translated {language} content directly")
+                # Clean the content for Telegram HTML format
+                clean_content = self._clean_translated_content(content)
+                result = self._send_content(clean_content, {})
+                return result
+
+            # For English and other languages - use existing processing
             # Parse content and create clean structure with verified source priority
             structured_data = self._extract_clean_content(content)
-            
+
             # Debug: Show found article links
             self._debug_article_links(structured_data)
-            
+
             if not self._has_valid_content(structured_data):
                 return "No valid financial content found"
-            
+
             # Enhanced image finding with Telegram-compatible priority
             image_data = self._find_telegram_compatible_image(content, structured_data)
-            
+
             # Create clean message with proper structure
             message = self._create_clean_message(structured_data, language)
-            
+
             # Send content with verified image
             result = self._send_content(message, image_data)
-            
+
             return result
         except Exception as e:
             logger.error(f"Telegram sender failed: {e}")
             return f"Error: {e}"
+
+    def send_from_workflow_result(self, json_file_path: str, language: str = "english") -> str:
+        """
+        Send message to Telegram directly from workflow result JSON file
+
+        Args:
+            json_file_path: Path to the workflow result JSON file
+            language: Target language for the message
+
+        Returns:
+            Status message indicating success or failure
+        """
+        try:
+            logger.info(f"📄 Processing workflow result from: {json_file_path}")
+
+            # Read content from the workflow result file
+            with open(json_file_path, 'r', encoding='utf-8') as f:
+                workflow_data = json.load(f)
+
+            # Extract content from workflow result
+            if isinstance(workflow_data, dict) and 'content' in workflow_data:
+                content = workflow_data['content']
+            elif isinstance(workflow_data, str):
+                content = workflow_data
+            else:
+                content = str(workflow_data)
+
+            logger.info(f"✅ Loaded {len(content)} characters for {language}")
+
+            # Process the content through the normal flow
+            return self._run(content, language)
+
+        except Exception as e:
+            logger.error(f"❌ Failed to send from workflow result: {e}")
+            return f"Error processing workflow result: {e}"
 
     def _extract_clean_content(self, content: str) -> Dict[str, Any]:
         """Extract and clean content with verified source priority"""
@@ -144,18 +188,15 @@ class EnhancedTelegramSender(BaseTool):
         # Extract content sections with multiple approaches
         self._extract_content_sections(lines, data)
 
-        # Fallback content generation
+        # Simple content requirement - no fallbacks
         if not data["key_points"]:
-            data["key_points"] = self._generate_fallback_points(content)
-        
-        if not data["market_implications"]:
-            data["market_implications"] = self._generate_fallback_implications(content)
+            data["key_points"] = ["No key points available"]
 
-        # Set defaults ONLY if no verified source found
-        data["title"] = data["title"] or "US Market Update"
-        if not data["source_url"] and not data["verified_source"]:
-            data["source_url"] = "https://finance.yahoo.com"
-            data["source"] = "Yahoo Finance"
+        if not data["market_implications"]:
+            data["market_implications"] = ["No market implications available"]
+
+        # Set minimal defaults only
+        data["title"] = data["title"] or "Market Update"
         
         return data
 
@@ -290,40 +331,10 @@ class EnhancedTelegramSender(BaseTool):
         except Exception as e:
             logger.warning(f"Enhanced ImageFinder failed: {e}")
 
-        # THIRD PRIORITY: Create stock-specific placeholder if stocks mentioned
-        stocks = self._extract_stock_symbols(original_content)
-        if stocks:
-            primary_stock = stocks[0]
-            stock_placeholder = self._create_stock_placeholder(primary_stock)
-            logger.info(f"🖼️ Using stock-specific placeholder for {primary_stock}")
-            return stock_placeholder
+        # NO FALLBACK: Return empty image data
+        logger.info("🖼️ No image available")
+        return {}
 
-        # FALLBACK: Telegram-compatible general placeholder
-        logger.info("🖼️ Using general market placeholder image")
-        return self._get_telegram_compatible_fallback()
-
-    def _create_stock_placeholder(self, stock_symbol: str) -> Dict[str, str]:
-        """Create a stock-specific placeholder image"""
-        placeholder_url = f"https://via.placeholder.com/800x600/1f77b4/ffffff?text={stock_symbol}+Stock+Chart"
-        return {
-            "url": placeholder_url,
-            "title": f"{stock_symbol} Stock Chart",
-            "source": "Stock Placeholder",
-            "telegram_compatible": True,
-            "stock_symbol": stock_symbol,
-            "type": "stock_placeholder"
-        }
-
-    def _get_telegram_compatible_fallback(self) -> Dict[str, str]:
-        """Get guaranteed Telegram-compatible fallback image"""
-        placeholder_url = "https://via.placeholder.com/800x600/2ca02c/ffffff?text=Stock+Market+Update"
-        return {
-            "url": placeholder_url,
-            "title": "Stock Market Update Chart",
-            "source": "Market Placeholder",
-            "telegram_compatible": True,
-            "type": "market_placeholder"
-        }
 
     def _extract_stock_symbols(self, content: str) -> List[str]:
         """Extract stock symbols from content"""
@@ -420,61 +431,27 @@ class EnhancedTelegramSender(BaseTool):
         
         return text.strip()
 
+    def _clean_translated_content(self, content: str) -> str:
+        """Clean translated content for Telegram while preserving formatting"""
+        if not isinstance(content, str):
+            content = str(content)
+
+        # Basic HTML validation for Telegram
+        content = self._validate_html_structure(content)
+
+        # Ensure proper encoding
+        try:
+            content = content.encode('utf-8').decode('utf-8')
+        except:
+            pass
+
+        return content.strip()
+
     def _is_metadata(self, text: str) -> bool:
         """Check if text is metadata"""
         metadata_terms = ['search', 'metadata', 'completed', 'results', 'hours', 'utc', 'total', 'verification', 'confidence', 'image search']
         return any(term in text.lower() for term in metadata_terms)
 
-    def _generate_fallback_points(self, content: str) -> List[str]:
-        """Generate fallback key points"""
-        points = []
-        
-        # Extract stock mentions
-        stocks = re.findall(r'\b([A-Z]{2,5})\b', content)
-        major_stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "FDX", "INTC", "ADSK"]
-        relevant_stocks = [s for s in stocks if s in major_stocks]
-        
-        if relevant_stocks:
-            points.append(f"Key stocks in focus include {', '.join(relevant_stocks[:4])}")
-        
-        if 'earnings' in content.lower():
-            points.append("Corporate earnings reports continue to drive market activity")
-        
-        if 'fed' in content.lower() or 'federal' in content.lower():
-            points.append("Federal Reserve policy decisions remain a key market factor")
-        
-        # Default fallbacks
-        if not points:
-            points = [
-                "US equity markets showing mixed performance across sectors",
-                "Investor attention focused on corporate earnings and economic data",
-                "Market sentiment reflecting current economic and policy conditions"
-            ]
-        
-        return points[:4]
-
-    def _generate_fallback_implications(self, content: str) -> List[str]:
-        """Generate fallback market implications"""
-        implications = []
-        
-        if 'earnings' in content.lower():
-            implications.append("Earnings performance continues to be a primary driver of stock valuations")
-        
-        if 'fed' in content.lower():
-            implications.append("Fed policy decisions remain crucial for market direction")
-        
-        if 'technology' in content.lower() or any(stock in content for stock in ['NVDA', 'AAPL', 'MSFT', 'INTC']):
-            implications.append("Technology sector developments significantly impact broader market sentiment")
-        
-        # Default fallbacks
-        if not implications:
-            implications = [
-                "Current market movements reflect ongoing economic assessment by investors",
-                "Corporate performance and policy developments remain key focus areas",
-                "Investor sentiment continues to be shaped by earnings results and economic indicators"
-            ]
-        
-        return implications[:3]
 
     def _has_valid_content(self, data: Dict[str, Any]) -> bool:
         """Validate content quality"""
@@ -583,12 +560,11 @@ class EnhancedTelegramSender(BaseTool):
         
         # Join message
         final_message = "\n".join(message_parts)
-        
-        if language.lower() in ["arabic", "ar"]:
-            final_message = f"\u200F{final_message}"
-        
+
+        # RTL language handling removed - content comes pre-formatted from translator
+
         final_message = self._validate_html_structure(final_message)
-        
+
         return final_message
 
     def _clean_for_telegram(self, text: str) -> str:
@@ -645,21 +621,28 @@ class EnhancedTelegramSender(BaseTool):
         return "Failed to send message"
 
     def _send_photo(self, image_url: str, caption: str) -> bool:
-        """Send photo to Telegram with enhanced error handling"""
+        """Send photo to Telegram with Unicode support in captions"""
         try:
             # Test if image URL is accessible first
             if not self._test_image_accessibility(image_url):
                 logger.warning(f"Image URL not accessible, skipping photo send: {image_url}")
                 return False
-            
+
+            # Ensure proper UTF-8 encoding for Unicode characters in caption
+            if isinstance(caption, str):
+                caption_encoded = caption.encode('utf-8').decode('utf-8')
+            else:
+                caption_encoded = str(caption)
+
             payload = {
                 "chat_id": self.chat_id,
                 "photo": image_url,
-                "caption": caption[:1024],  # Telegram caption limit
+                "caption": caption_encoded[:1024],  # Telegram caption limit
                 "parse_mode": "HTML"
             }
             
-            response = requests.post(f"{self.base_url}/sendPhoto", json=payload, timeout=30)
+            response = requests.post(f"{self.base_url}/sendPhoto", json=payload, timeout=30,
+                                   headers={'Content-Type': 'application/json; charset=utf-8'})
             
             if response.ok:
                 response_data = response.json()
@@ -710,16 +693,23 @@ class EnhancedTelegramSender(BaseTool):
             return False
 
     def _send_message(self, message: str) -> bool:
-        """Send text message to Telegram with enhanced error handling"""
+        """Send text message to Telegram with Unicode support"""
         try:
+            # Ensure proper UTF-8 encoding for Unicode characters
+            if isinstance(message, str):
+                message_encoded = message.encode('utf-8').decode('utf-8')
+            else:
+                message_encoded = str(message)
+
             payload = {
                 "chat_id": self.chat_id,
-                "text": message[:4096],  # Telegram message limit
+                "text": message_encoded[:4096],  # Telegram message limit
                 "parse_mode": "HTML",
                 "disable_web_page_preview": False  # Allow previews for source links
             }
             
-            response = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=30)
+            response = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=30,
+                                   headers={'Content-Type': 'application/json; charset=utf-8'})
             
             if response.ok:
                 response_data = response.json()

@@ -335,31 +335,3 @@ class EnhancedImageFinder(BaseTool):
         
         return verification_data
 
-    def _get_fallback_telegram_images(self) -> List[Dict[str, Any]]:
-        """Get guaranteed Telegram-compatible fallback images"""
-        fallback_images = [
-            {
-                'url': 'https://via.placeholder.com/800x600/1f77b4/ffffff?text=Stock+Market+Chart',
-                'title': 'Stock Market Placeholder Chart',
-                'source': 'Placeholder',
-                'type': 'fallback',
-                'relevance_score': 30,
-                'telegram_compatible': True,
-                'verification_status': 'fallback_guaranteed',
-                'file_type': 'png',
-                'trusted_source': False
-            },
-            {
-                'url': 'https://via.placeholder.com/800x600/2ca02c/ffffff?text=Financial+Data',
-                'title': 'Financial Data Chart',
-                'source': 'Placeholder',
-                'type': 'fallback',
-                'relevance_score': 25,
-                'telegram_compatible': True,
-                'verification_status': 'fallback_guaranteed',
-                'file_type': 'png',
-                'trusted_source': False
-            }
-        ]
-        
-        return fallback_images
