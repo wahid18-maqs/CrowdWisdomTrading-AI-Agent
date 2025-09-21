@@ -836,7 +836,9 @@ class FinancialMarketCrew:
                 lang_send_task = Task(
                     description=f"""Send verified {lang} financial summary: {enhanced_translated_content}
 
-                    Same verification process as English version with source verification status.""",
+                    Same verification process as English version with source verification status.
+
+                    Use telegram_sender tool with language='{lang}' to ensure proper formatting for {lang} content.""",
                     expected_output=f"Confirmation of {lang} message delivery with verification status.",
                     agent=send_agent
                 )
