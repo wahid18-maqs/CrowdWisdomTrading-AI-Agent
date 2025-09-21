@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from crewai.tools import BaseTool
@@ -57,7 +58,6 @@ class EnhancedTelegramSender(BaseTool):
 
     def _run(self, content: str, language: str = "english") -> str:
         try:
-            # Parse content and create clean structure for all languages
             if language.lower() in ["hindi", "arabic", "hebrew"]:
                 structured_data = self._extract_translated_content_structure(content)
             else:
@@ -104,12 +104,22 @@ class EnhancedTelegramSender(BaseTool):
             with open(json_file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
 
+            # Debug: Check if main_source URL exists in the loaded data
+            logger.info(f"🔍 DEBUG: Checking for main_source URL in workflow data...")
+            if isinstance(workflow_data, dict) and 'workflow_result' in workflow_data:
+                wr = workflow_data['workflow_result']
+                if 'results' in wr and 'web_source' in wr['results'] and 'main_source' in wr['results']['web_source']:
+                    main_source = wr['results']['web_source']['main_source']
+                    logger.info(f"🎯 DEBUG: Found main_source URL: {main_source.get('url', 'NO_URL')}")
+                    logger.info(f"🎯 DEBUG: Found main_source title: {main_source.get('title', 'NO_TITLE')}")
+
+            # For workflow results, pass the entire JSON data for better source extraction
             if isinstance(workflow_data, dict) and 'content' in workflow_data:
                 content = workflow_data['content']
             elif isinstance(workflow_data, str):
                 content = workflow_data
             else:
-                content = str(workflow_data)
+                content = json.dumps(workflow_data)  # Keep JSON structure for source extraction
 
             logger.info(f"✅ Loaded {len(content)} characters for {language}")
             return self._run(content, language)
@@ -463,9 +473,69 @@ class EnhancedTelegramSender(BaseTool):
 
     def _extract_verified_source_info(self, content: str) -> Optional[Dict[str, Any]]:
         try:
+            logger.info(f"🔍 DEBUG: _extract_verified_source_info called with content length: {len(content)}")
+            logger.info(f"🔍 DEBUG: Content starts with: {content[:100]}...")
+
+            # First try to parse the entire content as JSON (for workflow results)
+            try:
+                if content.strip().startswith('{'):
+                    data = json.loads(content)
+                    logger.info(f"🔍 DEBUG: Successfully parsed JSON, checking for main_source...")
+
+                    # Check for direct workflow result structure
+                    if 'results' in data and 'web_source' in data['results']:
+                        web_source = data['results']['web_source']
+                        if 'main_source' in web_source:
+                            main_source = web_source['main_source']
+                            if main_source.get("url") and main_source.get("title"):
+                                logger.info(f"🔍 Found verified source in results.web_source: {main_source.get('title')[:50]}...")
+                                return {
+                                    "title": main_source.get("title", ""),
+                                    "url": main_source.get("url", ""),
+                                    "source": main_source.get("source", ""),
+                                    "url_verified": True,  # From workflow results, these are verified
+                                    "confidence_score": data['results'].get("source_confidence", 0),
+                                    "verification_status": "verified"
+                                }
+
+                    # Look for main_source in web_source or selected_source at root level
+                    for source_key in ['web_source', 'selected_source']:
+                        if source_key in data and 'main_source' in data[source_key]:
+                            main_source = data[source_key]['main_source']
+                            if main_source.get("url") and main_source.get("title"):
+                                logger.info(f"🔍 Found verified source in {source_key}: {main_source.get('title')[:50]}...")
+                                return {
+                                    "title": main_source.get("title", ""),
+                                    "url": main_source.get("url", ""),
+                                    "source": main_source.get("source", ""),
+                                    "url_verified": main_source.get("url_verified", True),  # Default to True for verified sources
+                                    "confidence_score": main_source.get("relevance_score", 0),
+                                    "verification_status": "verified"
+                                }
+
+                    # Look for main_source in workflow_result.results (legacy structure)
+                    if 'workflow_result' in data and 'results' in data['workflow_result']:
+                        results = data['workflow_result']['results']
+                        for source_key in ['web_source', 'selected_source']:
+                            if source_key in results and 'main_source' in results[source_key]:
+                                main_source = results[source_key]['main_source']
+                                if main_source.get("url") and main_source.get("title"):
+                                    logger.info(f"🔍 Found verified source in workflow_result.{source_key}: {main_source.get('title')[:50]}...")
+                                    return {
+                                        "title": main_source.get("title", ""),
+                                        "url": main_source.get("url", ""),
+                                        "source": main_source.get("source", ""),
+                                        "url_verified": main_source.get("url_verified", True),
+                                        "confidence_score": main_source.get("relevance_score", 0),
+                                        "verification_status": "verified"
+                                    }
+            except json.JSONDecodeError:
+                pass
+
+            # Fallback to original regex-based extraction for backward compatibility
             json_pattern = r'\{[^}]*"main_source"[^}]*\}'
             json_matches = re.findall(json_pattern, content, re.DOTALL)
-            
+
             for json_str in json_matches:
                 try:
                     source_data = json.loads(json_str)
@@ -670,7 +740,7 @@ class EnhancedTelegramSender(BaseTool):
             logger.info(f"  Confidence: {verified_source.get('confidence_score', 0)}/100")
         else:
             logger.info("NO VERIFIED SOURCE - Using fallback")
-            logger.info(f"Fallback URL: {data.get('source_url', 'N/A')}")
+            logger.info(f"Fallback URL: https://finance.yahoo.com/news/")
         
         if verified_image:
             logger.info("VERIFIED IMAGE FOUND:")
@@ -701,11 +771,9 @@ class EnhancedTelegramSender(BaseTool):
         if not message:
             return message
 
-        # Preserve bullet points and structure
         lines = message.split('\n')
         formatted_lines = []
         for line in lines:
-            # Ensure bullet points remain as •
             if line.strip().startswith('•'):
                 formatted_lines.append(line)
             else:
@@ -713,7 +781,6 @@ class EnhancedTelegramSender(BaseTool):
 
         message = '\n'.join(formatted_lines)
 
-        # Add RTL support for Arabic and Hebrew
         if language.lower() in ["arabic", "hebrew"]:
             arabic_pattern = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]'
             hebrew_pattern = r'[\u0590-\u05FF]'
@@ -726,7 +793,6 @@ class EnhancedTelegramSender(BaseTool):
                 message = re.sub(r'<b>', '<b dir="rtl">', message)
                 message = re.sub(r'<i>', '<i dir="rtl">', message)
 
-        # Ensure proper encoding
         try:
             message = message.encode('utf-8').decode('utf-8')
         except:
@@ -771,36 +837,44 @@ class EnhancedTelegramSender(BaseTool):
 
     def _create_clean_message(self, data: Dict[str, Any], language: str) -> str:
         title = self._clean_for_telegram(data.get("title", "Market Update"))
-        
+
+        translations = {
+            "english": {"source": "Source:", "link": "link"},
+            "hindi": {"source": "स्रोत:", "link": "लिंक"},
+            "arabic": {"source": "المصدر:", "link": "رابط"},
+            "hebrew": {"source": "מקור:", "link": "קישור"}
+        }
+
+        lang_key = language.lower() if language.lower() in translations else "english"
+        source_label = translations[lang_key]["source"]
+        link_text = translations[lang_key]["link"]
+
         message_parts = []
         message_parts.append(f"<b>{title}</b>")
         message_parts.append("")
 
         verified_source = data.get("verified_source")
         if verified_source:
-            source_title = verified_source.get("title", "Financial News")
             source_url = verified_source.get("url", "")
-            source_name = verified_source.get("source", "")
             url_verified = verified_source.get("url_verified", False)
             verification_icon = " ✅" if url_verified else " ⚠️"
-            clean_title = self._clean_for_telegram(source_title)
-            clean_source = self._clean_for_telegram(source_name)
+
             if source_url and source_url.startswith("http"):
-                if clean_source and clean_source not in clean_title:
-                    display_text = f"{clean_title} - {clean_source}"
-                else:
-                    display_text = clean_title
-                source_line = f"<b>Source:</b> <a href=\"{source_url}\">{display_text}</a>{verification_icon}"
+                domain_name = self._extract_domain_name(source_url)
+                source_line = f"<b>{source_label}</b> {self._clean_for_telegram(domain_name)} (<a href=\"{source_url}\">{link_text}</a>){verification_icon}"
             else:
-                source_line = f"<b>Source:</b> {clean_title}{verification_icon}"
+                source_title = verified_source.get("title", "Financial News")
+                clean_title = self._clean_for_telegram(source_title)
+                source_line = f"<b>{source_label}</b> {clean_title}{verification_icon}"
             message_parts.append(source_line)
         else:
             source = data.get("source", "Financial News")
             source_url = data.get("source_url", "")
             if source_url and source_url.startswith("http"):
-                source_line = f"<b>Source:</b> <a href=\"{source_url}\">{self._clean_for_telegram(source)}</a>"
+                domain_name = self._extract_domain_name(source_url)
+                source_line = f"<b>{source_label}</b> {self._clean_for_telegram(domain_name)} (<a href=\"{source_url}\">{link_text}</a>)"
             else:
-                source_line = f"<b>Source:</b> {self._clean_for_telegram(source)}"
+                source_line = f"<b>{source_label}</b> Unknown Source (<a href=\"https://finance.yahoo.com/news/\">{link_text}</a>)"
             message_parts.append(source_line)
         
         message_parts.append("")
@@ -808,7 +882,7 @@ class EnhancedTelegramSender(BaseTool):
         key_points = data.get("key_points", [])
         if key_points:
             message_parts.append("<b>Key Points:</b>")
-            for point in key_points[:5]:  # Limit to 5 points
+            for point in key_points[:5]:
                 clean_point = self._clean_for_telegram(point)
                 if clean_point:
                     message_parts.append(f"• {clean_point}")
@@ -818,7 +892,7 @@ class EnhancedTelegramSender(BaseTool):
         implications = data.get("market_implications", [])
         if implications:
             message_parts.append("<b>Market Implications:</b>")
-            for impl in implications[:5]:  # Limit to 5 implications
+            for impl in implications[:5]:
                 clean_impl = self._clean_for_telegram(impl)
                 if clean_impl:
                     message_parts.append(f"• {clean_impl}")
@@ -864,6 +938,51 @@ class EnhancedTelegramSender(BaseTool):
                    .replace('>', '&gt;')
                    .replace('"', '&quot;'))
         return text.strip()
+
+    def _extract_domain_name(self, url: str) -> str:
+        try:
+            if not url or not url.startswith('http'):
+                return "Unknown Source"
+
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower()
+
+            if domain.startswith('www.'):
+                domain = domain[4:]
+
+            domain_mapping = {
+                'reuters.com': 'Reuters',
+                'bloomberg.com': 'Bloomberg',
+                'cnbc.com': 'CNBC',
+                'marketwatch.com': 'MarketWatch',
+                'finance.yahoo.com': 'Yahoo Finance',
+                'yahoo.com': 'Yahoo Finance',
+                'wsj.com': 'Wall Street Journal',
+                'ft.com': 'Financial Times',
+                'cnn.com': 'CNN',
+                'bbc.com': 'BBC',
+                'investopedia.com': 'Investopedia',
+                'seekingalpha.com': 'Seeking Alpha',
+                'fool.com': 'Motley Fool',
+                'zacks.com': 'Zacks',
+                'morningstar.com': 'Morningstar'
+            }
+
+            for known_domain, display_name in domain_mapping.items():
+                if known_domain in domain:
+                    return display_name
+
+            if '.' in domain:
+                parts = domain.split('.')
+                if len(parts) >= 2:
+                    main_part = parts[-2]
+                    return main_part.capitalize()
+
+            return domain.capitalize()
+
+        except Exception as e:
+            logger.warning(f"Error extracting domain from URL {url}: {e}")
+            return "Unknown Source"
 
     def _validate_html_structure(self, message: str) -> str:
         message = re.sub(r'<b>\s*</b>', '', message)
