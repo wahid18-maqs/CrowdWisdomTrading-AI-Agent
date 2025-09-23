@@ -154,7 +154,6 @@ class WorkflowConfig:
             "max_search_results": 8,
             "search_hours_back": 1,  # Enforced 1-hour limit
             "max_images": 2,
-            "languages": ["arabic", "hindi", "hebrew"],
             "telegram_max_message_length": 4096,
             "enable_fallbacks": True,
             "save_outputs_locally": True,
@@ -193,7 +192,6 @@ class WorkflowConfig:
                 "max_search_results": 5,
                 "max_images": 1,
                 "search_hours_back": 1,
-                "languages": ["arabic"],  # Reduce translations to save API calls
                 "validation_retry_on_low_confidence": False,  # Reduce retries
             })
             logger.info("Using optimized settings for free tier API usage.")
@@ -203,8 +201,7 @@ class WorkflowConfig:
                 "max_search_results": 10,
                 "max_images": 3,
                 "validation_retry_on_low_confidence": True,
-                "languages": ["arabic", "hindi", "hebrew"],
-            })
+                })
             logger.info("Using enhanced settings for paid tier API usage.")
 
         return optimized

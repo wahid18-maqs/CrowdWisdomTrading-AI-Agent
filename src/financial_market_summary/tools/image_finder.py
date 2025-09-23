@@ -8,6 +8,11 @@ from crewai.tools import BaseTool
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import time
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -19,7 +24,7 @@ class EnhancedImageFinderInput(BaseModel):
 
 class EnhancedImageFinder(BaseTool):
     name: str = "enhanced_financial_image_finder"
-    description: str = "Finds actual image files (PNG/JPG) for financial charts and stock images that work with Telegram"
+    description: str = "Finds relevant financial images using Serper API based on summary content and mentioned stocks"
     args_schema: Type[BaseModel] = EnhancedImageFinderInput
 
     def __init__(self, **kwargs):
@@ -29,20 +34,22 @@ class EnhancedImageFinder(BaseTool):
         try:
             if mentioned_stocks is None:
                 mentioned_stocks = []
-            
+
             # Extract stock symbols from content if not provided
             if not mentioned_stocks:
                 mentioned_stocks = self._extract_stock_symbols(search_content)
-            
-            # Find Telegram-compatible images
-            verified_images = self._find_telegram_compatible_images(search_content, mentioned_stocks, max_images)
-            
+
+            # Find relevant images using Serper API
+            verified_images = self._find_serper_images(search_content, mentioned_stocks, max_images)
+
             # Return as JSON
             return json.dumps(verified_images, indent=2)
-            
+
         except Exception as e:
-            logger.error(f"Telegram-compatible image finder failed: {e}")
-            return json.dumps([])
+            logger.error(f"Serper image finder failed: {e}")
+            # Fallback to static images if Serper fails
+            fallback_images = self._get_fallback_images(search_content, mentioned_stocks, max_images)
+            return json.dumps(fallback_images, indent=2)
 
     def _extract_stock_symbols(self, content: str) -> List[str]:
         """Extract stock symbols from content"""
@@ -56,39 +63,268 @@ class EnhancedImageFinder(BaseTool):
         valid_stocks = [stock for stock in stocks if stock in major_stocks]
         return list(set(valid_stocks))[:5]
 
-    def _find_telegram_compatible_images(self, content: str, stocks: List[str], max_images: int) -> List[Dict[str, Any]]:
-        """Find actual image files that work with Telegram"""
+    def _find_serper_images(self, content: str, stocks: List[str], max_images: int) -> List[Dict[str, Any]]:
+        """Find relevant financial images using Serper API based on summary content"""
+        serper_api_key = os.getenv("SERPER_API_KEY")
+        if not serper_api_key:
+            logger.warning("⚠️ No Serper API key available, using fallback images")
+            return self._get_fallback_images(content, stocks, max_images)
+
         verified_images = []
-        
-        # Strategy 1: TradingView snapshot images (actual PNG files)
-        for stock in stocks[:2]:
-            tradingview_images = self._get_tradingview_snapshots(stock)
-            verified_images.extend(tradingview_images)
-            if len(verified_images) >= max_images:
+
+        try:
+            # Build search queries based on content and stocks
+            search_queries = self._build_image_search_queries(content, stocks)
+
+            for query in search_queries[:3]:  # Limit to 3 queries to avoid rate limits
+                logger.info(f"🔍 Searching images with query: {query}")
+
+                # Search for images using Serper API
+                serper_images = self._search_serper_images(query, max_images, serper_api_key)
+
+                if serper_images:
+                    # Process and verify images
+                    processed_images = self._process_serper_results(serper_images, content, stocks)
+                    verified_images.extend(processed_images)
+
+                    if len(verified_images) >= max_images:
+                        break
+
+            # Verify Telegram compatibility
+            verified_images = self._verify_telegram_compatibility(verified_images)
+
+            # Sort by relevance and compatibility
+            verified_images.sort(key=lambda x: (
+                x.get('telegram_compatible', False),
+                x.get('relevance_score', 0)
+            ), reverse=True)
+
+            # Add fallback if no good images found
+            if not any(img.get('telegram_compatible', False) for img in verified_images):
+                logger.warning("⚠️ No Telegram-compatible images from Serper, adding fallbacks")
+                fallback_images = self._get_fallback_images(content, stocks, 2)
+                verified_images.extend(fallback_images)
+
+            return verified_images[:max_images]
+
+        except Exception as e:
+            logger.error(f"Error in Serper image search: {e}")
+            return self._get_fallback_images(content, stocks, max_images)
+
+    def _build_image_search_queries(self, content: str, stocks: List[str]) -> List[str]:
+        """Build targeted search queries for financial images"""
+        queries = []
+
+        # Query 1: Stock-specific chart
+        if stocks:
+            primary_stock = stocks[0]
+            queries.append(f"{primary_stock} stock chart price graph financial")
+
+        # Query 2: Content-based financial search
+        content_keywords = self._extract_content_keywords(content)
+        if content_keywords:
+            queries.append(f"{content_keywords} financial chart market graph")
+
+        # Query 3: Market index based on content
+        market_terms = ['federal reserve', 'fed', 'interest rate', 'inflation', 'gdp', 'jobs report']
+        if any(term in content.lower() for term in market_terms):
+            queries.append("federal reserve economic data chart graph")
+        elif 'earnings' in content.lower():
+            queries.append("corporate earnings chart financial results")
+        else:
+            queries.append("stock market chart financial graph today")
+
+        return queries
+
+    def _extract_content_keywords(self, content: str) -> str:
+        """Extract key financial terms from content for search"""
+        financial_keywords = [
+            'earnings', 'revenue', 'profit', 'loss', 'guidance', 'forecast',
+            'federal reserve', 'fed', 'interest rate', 'inflation', 'gdp',
+            'unemployment', 'jobs', 'manufacturing', 'retail', 'housing',
+            'merger', 'acquisition', 'ipo', 'dividend', 'buyback',
+            'nasdaq', 's&p 500', 'dow jones', 'russell', 'market'
+        ]
+
+        content_lower = content.lower()
+        found_keywords = [kw for kw in financial_keywords if kw in content_lower]
+
+        return ' '.join(found_keywords[:3])  # Top 3 relevant keywords
+
+    def _search_serper_images(self, query: str, max_results: int = 10, api_key: str = None) -> List[Dict[str, Any]]:
+        """Search for images using Serper API"""
+        url = "https://google.serper.dev/images"
+
+        headers = {
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json"
+        }
+
+        # Add time filter for recent images
+        payload = {
+            "q": query,
+            "num": max_results,
+            "gl": "us",
+            "hl": "en",
+            "tbm": "isch",
+            "tbs": "qdr:w"  # Images from past week
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                images = data.get("images", [])
+                logger.info(f"✅ Found {len(images)} images from Serper API")
+                return images
+            else:
+                logger.error(f"❌ Serper API error: {response.status_code} - {response.text}")
+                return []
+
+        except Exception as e:
+            logger.error(f"❌ Error calling Serper API: {e}")
+            return []
+
+    def _process_serper_results(self, serper_images: List[Dict[str, Any]], content: str, stocks: List[str]) -> List[Dict[str, Any]]:
+        """Process Serper API results into our format"""
+        processed_images = []
+
+        for i, img in enumerate(serper_images):
+            try:
+                # Extract image information
+                image_url = img.get("imageUrl", "")
+                title = img.get("title", "")
+                source = img.get("source", "")
+
+                if not image_url:
+                    continue
+
+                # Calculate relevance score
+                relevance_score = self._calculate_relevance_score(title, source, content, stocks)
+
+                processed_image = {
+                    'url': image_url,
+                    'title': title or f"Financial Chart {i+1}",
+                    'source': source or "Financial News",
+                    'type': self._determine_image_type(title, content),
+                    'relevance_score': relevance_score,
+                    'telegram_compatible': False,  # Will be verified later
+                    'file_type': self._get_file_extension(image_url),
+                    'trusted_source': self._is_trusted_financial_source(source),
+                    'from_serper': True,
+                    'search_query': content[:50] + "..." if len(content) > 50 else content
+                }
+
+                # Add stock symbol if relevant
+                for stock in stocks:
+                    if stock.lower() in title.lower() or stock.upper() in title:
+                        processed_image['stock_symbol'] = stock
+                        break
+
+                processed_images.append(processed_image)
+
+            except Exception as e:
+                logger.warning(f"Error processing Serper image result: {e}")
+                continue
+
+        return processed_images
+
+    def _calculate_relevance_score(self, title: str, source: str, content: str, stocks: List[str]) -> int:
+        """Calculate relevance score for an image"""
+        score = 50  # Base score
+
+        title_lower = title.lower()
+        content_lower = content.lower()
+
+        # Stock symbol relevance
+        for stock in stocks:
+            if stock.lower() in title_lower:
+                score += 30
                 break
-        
-        # Strategy 2: Financial news site chart images
-        if len(verified_images) < max_images:
-            news_images = self._get_financial_news_images(content, stocks)
-            verified_images.extend(news_images)
-        
-        # Strategy 3: Market index PNG images
-        if len(verified_images) < max_images:
-            index_images = self._get_market_index_images(content)
-            verified_images.extend(index_images)
-        
-        # Strategy 4: Alternative chart providers
-        if len(verified_images) < max_images:
-            alt_images = self._get_alternative_chart_images(stocks)
-            verified_images.extend(alt_images)
-        
-        # Verify all image URLs work with Telegram
-        verified_images = self._verify_telegram_compatibility(verified_images)
-        
-        # Sort by relevance and verification status
-        verified_images.sort(key=lambda x: (x.get('telegram_compatible', False), x.get('relevance_score', 0)), reverse=True)
-        
-        return verified_images[:max_images]
+
+        # Financial terms relevance
+        financial_terms = ['chart', 'graph', 'stock', 'market', 'financial', 'trading', 'price']
+        for term in financial_terms:
+            if term in title_lower:
+                score += 10
+
+        # Content keyword matching
+        content_words = set(content_lower.split())
+        title_words = set(title_lower.split())
+        common_words = content_words.intersection(title_words)
+        score += min(len(common_words) * 5, 25)
+
+        # Trusted source bonus
+        if self._is_trusted_financial_source(source):
+            score += 20
+
+        # Recency bonus (assumed for images from Serper with time filter)
+        score += 15
+
+        return min(score, 100)
+
+    def _determine_image_type(self, title: str, content: str) -> str:
+        """Determine the type of financial image"""
+        title_lower = title.lower()
+        content_lower = content.lower()
+
+        if any(term in title_lower for term in ['chart', 'graph', 'price']):
+            return 'stock_chart'
+        elif any(term in content_lower for term in ['fed', 'federal reserve', 'interest rate']):
+            return 'economic_data'
+        elif 'earnings' in content_lower:
+            return 'earnings_chart'
+        elif any(term in content_lower for term in ['nasdaq', 's&p', 'dow']):
+            return 'market_index'
+        else:
+            return 'financial_chart'
+
+    def _get_file_extension(self, url: str) -> str:
+        """Get file extension from URL"""
+        url_lower = url.lower()
+        if '.png' in url_lower:
+            return 'png'
+        elif '.jpg' in url_lower or '.jpeg' in url_lower:
+            return 'jpg'
+        elif '.gif' in url_lower:
+            return 'gif'
+        elif '.webp' in url_lower:
+            return 'webp'
+        else:
+            return 'unknown'
+
+    def _is_trusted_financial_source(self, source: str) -> bool:
+        """Check if source is a trusted financial website"""
+        trusted_sources = [
+            'yahoo.com', 'finance.yahoo.com', 'marketwatch.com', 'bloomberg.com',
+            'cnbc.com', 'reuters.com', 'wsj.com', 'ft.com', 'investing.com',
+            'tradingview.com', 'benzinga.com', 'seekingalpha.com', 'morningstar.com',
+            'fool.com', 'finviz.com', 'nasdaq.com', 'nyse.com'
+        ]
+
+        source_lower = source.lower()
+        return any(trusted in source_lower for trusted in trusted_sources)
+
+    def _get_fallback_images(self, content: str, stocks: List[str], max_images: int) -> List[Dict[str, Any]]:
+        """Get fallback images when Serper API fails or returns no results"""
+        fallback_images = []
+
+        # Stock-specific TradingView charts
+        for stock in stocks[:2]:
+            fallback_images.extend(self._get_tradingview_snapshots(stock))
+
+        # Market index charts
+        fallback_images.extend(self._get_market_index_images(content))
+
+        # Generic financial charts
+        fallback_images.extend(self._get_alternative_chart_images(stocks))
+
+        # Verify compatibility
+        fallback_images = self._verify_telegram_compatibility(fallback_images)
+
+        return fallback_images[:max_images]
+
 
     def _get_tradingview_snapshots(self, stock_symbol: str) -> List[Dict[str, Any]]:
         """Get TradingView chart snapshot images (actual PNG files)"""

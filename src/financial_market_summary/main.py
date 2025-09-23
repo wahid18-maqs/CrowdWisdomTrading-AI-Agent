@@ -107,7 +107,7 @@ def run_financial_summary() -> Dict[str, Any]:
             logger.info("Financial summary generated and sent successfully!")
             
             summary = result.get('summary', {})
-            logger.info(f"Summary of Accomplishments: {summary.get('translations_completed', 0)} translations, {summary.get('sends_completed', 0)} deliveries.")
+            logger.info(f"Summary of Accomplishments: {summary.get('sends_completed', 0)} deliveries.")
         else:
             logger.error(f"Execution failed: {result.get('error', 'Unknown error')}")
             

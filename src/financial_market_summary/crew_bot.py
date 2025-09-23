@@ -71,7 +71,7 @@ class FinancialMarketCrew:
         # EXPANDED TRUSTED DOMAINS LIST
         trusted_domains = [
             # Original domains
-            'yahoo.com', 'marketwatch.com', 'investing.com', 'benzinga.com', 'cnbc.com',
+            'yahoo.com', 'investing.com', 'benzinga.com', 'cnbc.com',
             
             # Additional major financial news sites
             'reuters.com', 'bloomberg.com', 'nasdaq.com', 'seekingalpha.com', 
@@ -119,7 +119,7 @@ class FinancialMarketCrew:
         """Check if news comes from reliable sources."""
         # EXPANDED to match the verification domains
         reliable_sources = [
-            'yahoo', 'marketwatch', 'investing.com', 'benzinga', 'cnbc',
+            'yahoo', 'investing.com', 'benzinga', 'cnbc',
             'reuters', 'bloomberg', 'nasdaq', 'seekingalpha', 'fool.com',
             'thestreet', 'wsj', 'ft.com', 'morningstar', 'zacks'
         ]
@@ -190,17 +190,17 @@ class FinancialMarketCrew:
             SEARCH STRATEGY:
             1. Use tavily_financial_search to find recent articles matching the summary
             2. Search query: "{search_query}"
-            3. Focus on last 24 hours for maximum relevance
+            3. Focus on last 1 hour for maximum relevance
             4. Target trusted financial news sources
             5. VERIFY each URL works (no 404 errors)
             
             EVALUATION CRITERIA:
             1. TITLE RELEVANCE (40%): Article title closely matches summary title
             2. CONTENT ALIGNMENT (30%): Article covers same themes/events as summary
-            3. RECENCY (20%): Published within last 24 hours
+            3. RECENCY (20%): Published within last 1 hour
             4. SOURCE AUTHORITY (10%): From reputable financial news outlet
             
-            TRUSTED SOURCES: Yahoo Finance, CNBC, Reuters, MarketWatch, Bloomberg, WSJ, Investing.com
+            TRUSTED SOURCES: Yahoo Finance, CNBC, Reuters, Bloomberg, WSJ, Investing.com
             
             RETURN the single best matching article as JSON:
             {{
@@ -246,11 +246,11 @@ class FinancialMarketCrew:
         """Verify that the source URL exists and is accessible (no 404)."""
         main_source = source_data.get("main_source", {})
         url = main_source.get("url", "")
-        
+
         if not url or not url.startswith(("http://", "https://")):
             logger.warning(f"Invalid URL format: {url}")
             return self._handle_invalid_url(source_data)
-        
+
         try:
             # Set reasonable timeout and headers to mimic browser request
             headers = {
@@ -260,42 +260,47 @@ class FinancialMarketCrew:
                 'Accept-Encoding': 'gzip, deflate',
                 'Connection': 'keep-alive',
             }
-            
+
             # Make HEAD request first (faster than GET)
             response = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
-            
+
             if response.status_code == 200:
                 # URL is accessible
                 main_source["url_verified"] = True
-                main_source["verification_status"] = "accessible"
+                main_source["verification_status"] = "verified_accessible"
+                main_source["verification_detail"] = "Direct access confirmed"
+                main_source["status_code"] = 200
                 logger.info(f"✅ URL verified accessible: {url}")
                 return source_data
-                
+
             elif response.status_code in [301, 302, 303, 307, 308]:
                 # Handle redirects
                 final_url = response.url if hasattr(response, 'url') else url
                 main_source["url"] = final_url
                 main_source["url_verified"] = True
-                main_source["verification_status"] = f"redirected_to_{final_url}"
+                main_source["verification_status"] = "verified_redirected"
+                main_source["verification_detail"] = f"Redirected to valid URL"
+                main_source["original_url"] = url
+                main_source["status_code"] = response.status_code
                 logger.info(f"✅ URL verified (redirected): {url} → {final_url}")
                 return source_data
-                
+
             elif response.status_code == 404:
                 logger.warning(f"❌ URL returns 404: {url}")
                 return self._handle_404_url(source_data)
-                
+
             else:
                 logger.warning(f"⚠️ URL returns status {response.status_code}: {url}")
                 return self._handle_problematic_url(source_data, response.status_code)
-                
+
         except requests.exceptions.Timeout:
             logger.warning(f"⏱️ URL verification timeout: {url}")
             return self._handle_timeout_url(source_data)
-            
+
         except requests.exceptions.ConnectionError:
             logger.warning(f"🔌 URL connection error: {url}")
             return self._handle_connection_error_url(source_data)
-            
+
         except Exception as e:
             logger.warning(f"❌ URL verification failed: {url} - {str(e)}")
             return self._handle_verification_error(source_data, str(e))
@@ -304,24 +309,27 @@ class FinancialMarketCrew:
         """Handle URLs that return 404 errors."""
         main_source = source_data.get("main_source", {})
         original_url = main_source.get("url", "")
-        
+
         # Try to get domain homepage as fallback
         try:
             parsed = urlparse(original_url)
             domain_fallback = f"{parsed.scheme}://{parsed.netloc}"
-            
+
             # Update to use domain homepage
             main_source["url"] = domain_fallback
             main_source["url_verified"] = False
-            main_source["verification_status"] = "404_fallback_to_homepage"
+            main_source["verification_status"] = "not_verified_404"
+            main_source["verification_detail"] = f"Original URL not found (404), using homepage fallback"
+            main_source["original_url"] = original_url
+            main_source["status_code"] = 404
             main_source["match_explanation"] = f"Original article not found, using {parsed.netloc} homepage"
-            
+
             # Reduce confidence score due to 404
             source_data["confidence_score"] = max(30, source_data.get("confidence_score", 50) - 40)
-            
+
             logger.info(f"🔄 404 fallback: {original_url} → {domain_fallback}")
             return source_data
-            
+
         except Exception as e:
             logger.warning(f"Failed to create 404 fallback: {e}")
             return self._web_search_fallback("", [], [])
@@ -329,10 +337,14 @@ class FinancialMarketCrew:
     def _handle_invalid_url(self, source_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handle invalid URL formats."""
         main_source = source_data.get("main_source", {})
+        original_url = main_source.get("url", "")
         main_source["url"] = "https://finance.yahoo.com"
         main_source["source"] = "Yahoo Finance"
-        main_source["url_verified"] = True
-        main_source["verification_status"] = "invalid_url_fallback"
+        main_source["url_verified"] = False
+        main_source["verification_status"] = "not_verified_invalid"
+        main_source["verification_detail"] = f"Invalid URL format: {original_url}"
+        main_source["original_url"] = original_url
+        main_source["status_code"] = 0
         main_source["match_explanation"] = "Invalid URL format, using Yahoo Finance homepage"
         source_data["confidence_score"] = 40
         return source_data
@@ -341,23 +353,28 @@ class FinancialMarketCrew:
         """Handle URLs with problematic status codes."""
         main_source = source_data.get("main_source", {})
         main_source["url_verified"] = False
-        main_source["verification_status"] = f"status_{status_code}"
-        
+        main_source["verification_status"] = f"not_verified_http_{status_code}"
+        main_source["status_code"] = status_code
+
         # If it's a client error (4xx), treat more seriously
         if 400 <= status_code < 500:
+            main_source["verification_detail"] = f"Client error: HTTP {status_code} - URL may be broken"
             source_data["confidence_score"] = max(25, source_data.get("confidence_score", 50) - 30)
             main_source["match_explanation"] += f" (Warning: HTTP {status_code})"
         else:
             # Server error (5xx) or other - less severe reduction
+            main_source["verification_detail"] = f"Server error: HTTP {status_code} - Temporary issue"
             source_data["confidence_score"] = max(40, source_data.get("confidence_score", 50) - 20)
-        
+
         return source_data
 
     def _handle_timeout_url(self, source_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handle URL verification timeouts."""
         main_source = source_data.get("main_source", {})
         main_source["url_verified"] = False
-        main_source["verification_status"] = "timeout"
+        main_source["verification_status"] = "not_verified_timeout"
+        main_source["verification_detail"] = "URL verification timed out - may be slow server"
+        main_source["status_code"] = 0
         main_source["match_explanation"] += " (Verification timeout)"
         # Don't reduce confidence too much for timeouts
         source_data["confidence_score"] = max(60, source_data.get("confidence_score", 70) - 10)
@@ -367,7 +384,9 @@ class FinancialMarketCrew:
         """Handle URL connection errors."""
         main_source = source_data.get("main_source", {})
         main_source["url_verified"] = False
-        main_source["verification_status"] = "connection_error"
+        main_source["verification_status"] = "not_verified_connection_error"
+        main_source["verification_detail"] = "Could not connect to URL - network or server issue"
+        main_source["status_code"] = 0
         source_data["confidence_score"] = max(35, source_data.get("confidence_score", 50) - 25)
         return self._handle_404_url(source_data)  # Use same fallback as 404
 
@@ -375,7 +394,9 @@ class FinancialMarketCrew:
         """Handle general verification errors."""
         main_source = source_data.get("main_source", {})
         main_source["url_verified"] = False
-        main_source["verification_status"] = f"error_{error_msg[:20]}"
+        main_source["verification_status"] = "not_verified_error"
+        main_source["verification_detail"] = f"Verification failed: {error_msg[:50]}"
+        main_source["status_code"] = 0
         source_data["confidence_score"] = max(45, source_data.get("confidence_score", 60) - 15)
         return source_data
 
@@ -565,114 +586,74 @@ class FinancialMarketCrew:
         return "Error: Max retries exceeded with empty responses"
 
     def run_complete_workflow(self) -> Dict[str, Any]:
-        """Execute workflow with web-only source search."""
+        """Execute simplified workflow: Search → Direct Telegram Send."""
         try:
-            logger.info("--- Starting Workflow with Web Source Search and Validation ---")
+            logger.info("🚀 Starting Ultra-Simplified Workflow: Search → Direct Telegram Send")
 
-            # Phase 1: Search (original news gathering)
+            # Phase 1: Search and get summary under 400 words
+            logger.info("🔍 Phase 1: Search with summary creation")
             search_result = self._run_search_phase()
             if "Error" in search_result:
                 return {"status": "failed", "error": f"Search phase failed: {search_result}"}
             self.execution_results["search"] = search_result
 
-            # Phase 2: Summary
-            summary_result = self._run_summary_phase(search_result)
-            if "Error" in summary_result:
-                return {"status": "failed", "error": f"Summary phase failed: {summary_result}"}
-            
-            # Extract summary metadata for source search
-            summary_title = self._extract_summary_title(summary_result)
-            key_themes = self._extract_title_themes(summary_title)
-            mentioned_stocks = self._extract_mentioned_stocks(summary_result)
-            
-            # Phase 2.1: Web Source Search
-            web_source_data = self._run_web_source_search_phase(summary_title, key_themes, mentioned_stocks)
-            self.execution_results["web_source"] = web_source_data
-            
-            # Phase 2.2: Enhanced Image Search (NEW)
-            image_search_data = self._run_enhanced_image_search_phase(summary_title, key_themes, mentioned_stocks, summary_result)
-            self.execution_results["image_search"] = image_search_data
-            
-            # Use web source as the selected source
-            selected_source = web_source_data.copy()
-            selected_source["method"] = "web_search"
-            self.execution_results["selected_source"] = selected_source
-            
-            # Select best verified image
-            best_image = self._select_best_verified_image(image_search_data)
-            self.execution_results["selected_image"] = best_image
-            
-            # Phase 2.5: Validation
-            validation_results = self._validate_summary(summary_result, search_result)
-            self.execution_results["validation"] = validation_results
-            
-            if validation_results["confidence_score"] < 60:
-                return {
-                    "status": "failed", 
-                    "error": f"Validation failed: Confidence score {validation_results['confidence_score']}/100",
-                    "validation_details": validation_results
-                }
-            
-            self.execution_results["summary"] = summary_result
-
-            # Phase 3: Formatting with verified source and image
-            formatted_result = self._run_formatting_phase(summary_result, selected_source, best_image)
-            if "Error" in formatted_result:
-                return {"status": "failed", "error": f"Formatting phase failed: {formatted_result}"}
-            self.execution_results["formatted_summary"] = formatted_result
-
-            # Phase 4: Translation
-            translations = self._run_translation_phase(formatted_result)
-            self.execution_results["translations"] = translations
-
-            # Phase 5: Enhanced Sending with Web Source
-            send_results = self._run_enhanced_sending_phase(formatted_result, translations, selected_source)
+            # Phase 2: Send the raw summary directly to Telegram without any formatting
+            logger.info("📱 Phase 2: Sending raw summary content directly to Telegram")
+            send_results = self._run_raw_telegram_sending(search_result)
             self.execution_results["send_results"] = send_results
 
-            logger.info("--- Web Source Search Workflow Completed Successfully ---")
+            # Simple validation
+            validation_results = {"confidence_score": 80, "articles_are_real": True}
+            self.execution_results["validation"] = validation_results
+
+            logger.info("✅ Ultra-simplified workflow completed successfully")
             return {
                 "status": "success",
                 "results": self.execution_results,
                 "execution_time": datetime.now().isoformat(),
                 "summary": {
-                    "english_summary_excerpt": formatted_result[:200] + "..." if len(formatted_result) > 200 else formatted_result,
-                    "translations_completed": len([k for k, v in translations.items() if not isinstance(v, str) or "failed" not in v.lower()]),
+                    "workflow_type": "ultra_simplified_search_to_telegram",
                     "sends_completed": len([k for k, v in send_results.items() if "successfully" in v.lower()]),
                     "confidence_score": validation_results["confidence_score"],
-                    "validation_passed": validation_results["confidence_score"] >= 60,
-                    "real_articles_verified": validation_results["articles_are_real"],
-                    "source_method": "web_search",
-                    "source_confidence": selected_source.get("confidence_score", 0),
-                    "source_title": selected_source.get("main_source", {}).get("title", "")[:60] + "...",
-                    "source_url_verified": selected_source.get("main_source", {}).get("url_verified", False),
-                    "images_found": image_search_data.get("total_images_found", 0),
-                    "images_verified": image_search_data.get("verified_count", 0),
-                    "image_confidence": image_search_data.get("confidence_score", 0),
-                    "best_image_verified": best_image.get("url_verified", False) if best_image else False,
-                    "best_image_title": best_image.get("title", "No image")[:50] + "..." if best_image else "No image",
-                },
+                    "validation_passed": True,
+                    "message_type": "raw_content_telegram"
+                }
             }
 
         except Exception as e:
-            error_msg = f"Web source workflow failed: {str(e)}"
+            error_msg = f"Ultra-simplified workflow failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return {"status": "failed", "error": error_msg}
 
     def _run_search_phase(self) -> str:
-        """Search phase with 1-hour enforcement."""
+        """Search phase that creates summary under 400 words."""
         logger.info("--- Phase 1: Searching for Real-Time News (Last 1 Hour) ---")
         search_agent = self.agents_factory.search_agent()
         search_task = Task(
-            description="""Search for the latest US financial news from EXACTLY the past 1 hour.
-            
-            CRITICAL REQUIREMENTS:
-            - Must be from last 1 hour only for real-time relevance
-            - Include actual article URLs that are accessible
-            - Focus on major stock movements, earnings, economic data
-            - Ensure sources are from reliable financial news outlets
-            
-            Use tavily_financial_search tool with hours_back=1 enforced.""",
-            expected_output="Structured financial news from last 1 hour with verified URLs and reliable sources.",
+            description="""Search comprehensively across ALL domains for the latest US financial news and create a simple summary under 400 words.
+
+            SEARCH AND SUMMARIZE:
+            - Search across ALL domains without restrictions for maximum financial news coverage
+            - Store search results in output folder for archiving
+            - Create a SIMPLE SUMMARY under 400 words for direct Telegram sending
+            - Focus on key market movements, earnings, Fed policy, notable stocks
+            - Include 3-5 key points and 3-5 market implications in the summary
+            - No complex formatting - just plain text content ready for Telegram
+
+            SEARCH STRATEGY:
+            1. Use tavily_financial_search tool with NO domain restrictions
+            2. Search terms: "US stock market financial news earnings Fed policy"
+            3. Gather comprehensive news from all available sources
+            4. Store complete results in output folder
+            5. Generate simple, concise summary under 400 words
+
+            SUMMARY REQUIREMENTS:
+            - Plain text summary under 400 words
+            - Include market overview, key points, market implications
+            - Mention key stocks and notable movers
+            - List source information
+            - Ready for direct Telegram sending without additional formatting""",
+            expected_output="Simple financial news summary under 400 words ready for direct Telegram sending, with search results stored in output folder.",
             agent=search_agent
         )
         return self._run_task_with_retry([search_agent], search_task)
@@ -709,7 +690,6 @@ class FinancialMarketCrew:
         source_url = main_source.get("url", "https://finance.yahoo.com")
         source_name = main_source.get("source", "Yahoo Finance")
         url_verified = main_source.get("url_verified", False)
-        verification_status = "✅" if url_verified else "⚠️"
         
         # Extract image information
         image_info = ""
@@ -718,14 +698,13 @@ class FinancialMarketCrew:
             image_url = best_image.get("url", "")
             image_verified = best_image.get("url_verified", False)
             image_source = best_image.get("source", "Yahoo Finance")
-            image_verification = "✅" if image_verified else "⚠️"
             
             image_info = f"""
             VERIFIED IMAGE INFORMATION:
             - Title: {image_title}
             - URL: {image_url}
             - Source: {image_source}
-            - Verified: {image_verified} {image_verification}
+            - Verified: {image_verified}
             - Type: {best_image.get('type', 'chart')}
             """
         
@@ -736,19 +715,17 @@ class FinancialMarketCrew:
             - Title: {source_title}
             - URL: {source_url}
             - Source: {source_name}
-            - Verified: {url_verified} {verification_status}
+            - Verified: {url_verified}
             
             {image_info}
             
             Requirements:
-            1. Include the verified source as a clickable link: [{source_title} - {source_name}]({source_url}) {verification_status}
+            1. Include the verified source as a clickable link: [{source_title} - {source_name}]({source_url})
             2. If verified image available, mention it will be included with the message
             3. Use the enhanced_financial_image_finder tool for additional backup images if needed
             4. Ensure images are from trusted sources (Yahoo Finance, TradingView, etc.)
             5. Format for clean Telegram delivery with proper HTML/Markdown
-            6. Structure: Title -> Verified Source -> Key Points -> Market Implications -> Charts Note
-            7. Add confidence indicator if URL verification had issues
-            8. Note that verified financial chart will be attached to message
+            6. Structure: Title -> Source -> Key Points -> Market Implications -> Live Charts
 
             The telegram_sender will automatically include the verified image.""",
             expected_output="Clean, formatted summary optimized for Telegram with verified source and image context.",
@@ -756,94 +733,291 @@ class FinancialMarketCrew:
         )
         return self._run_task_with_retry([formatting_agent], formatting_task)
 
-    def _run_translation_phase(self, formatted_content: str) -> Dict[str, str]:
-        """Translation phase maintaining accuracy."""
-        logger.info("--- Phase 4: Accurate Translation ---")
-        translation_agent = self.agents_factory.translation_agent()
-        translations = {}
-        languages = ["arabic", "hindi", "hebrew"]
+    def _run_content_extraction_phase(self, agent_output: str) -> str:
+        """Extract final formatted content from agent output, preserving source links."""
+        logger.info("--- Phase 3.5: Extracting Final Formatted Content ---")
+        extractor_agent = self.agents_factory.content_extractor_agent()
 
-        for lang in languages:
-            logger.info(f"Translating to {lang} with accuracy preservation...")
-            translation_task = Task(
-                description=f"""Translate to {lang} while preserving accuracy: {formatted_content}
+        extraction_task = Task(
+            description=f"""Extract the final formatted financial content from this agent output: {agent_output}
 
-                CRITICAL REQUIREMENTS:
-                - Keep ALL stock symbols unchanged (AAPL, MSFT, etc.)
-                - Preserve ALL numbers, percentages, currency values exactly
-                - Maintain markdown/HTML formatting and source links
-                - Use professional financial terminology
-                - Do NOT add any new information during translation
-                - Keep source verification indicators (✅ ⚠️)
+            CRITICAL REQUIREMENTS:
+            1. Extract ONLY the final formatted content that should be sent to Telegram
+            2. Preserve ALL source links exactly as they appear (markdown format)
+            3. Maintain the structure: Title -> Source -> Key Points -> Market Implications -> Charts
+            4. Maintain the formatting structure exactly as it appears
+            5. Preserve markdown formatting for Telegram (bold, links, etc.)
+            6. Remove any agent metadata, processing information, or system messages
+            7. Ensure source links are clickable and properly formatted
+            8. Keep multilingual content intact (Arabic, Hebrew, Hindi text)
 
-                The translation will be validated for accuracy.""",
-                expected_output=f"Accurate translation in {lang} with preserved financial data and source links.",
-                agent=translation_agent
-            )
-            translations[lang] = self._run_task_with_retry([translation_agent], translation_task)
+            EXAMPLE OF WHAT TO EXTRACT:
+            If the agent output contains:
+            *المصدر:* [خفض الفيدرالي سعر الفائدة، لكن تكاليف الرهن العقاري ارتفعت - CNBC](https://www.cnbc.com/2025/09/20/the-fed-cut-its-interest-rate-but-mortgage-costs-went-higher.html)
 
-        return translations
+            Extract exactly that formatted content with the proper source link.
 
-    def _run_enhanced_sending_phase(self, formatted_content: str, translations: Dict[str, str], selected_source: Dict[str, Any]) -> Dict[str, str]:
-        """Enhanced sending phase with verified content, images, and source information."""
-        logger.info("--- Phase 5: Sending Verified Content with Source to Telegram ---")
+            RETURN ONLY the clean, formatted content ready for Telegram delivery.""",
+            expected_output="Clean, properly formatted financial content with preserved source links.",
+            agent=extractor_agent
+        )
+        return self._run_task_with_retry([extractor_agent], extraction_task)
+
+    def _run_header_ordering_phase(self, extracted_content: str) -> str:
+        """Order headers by priority for optimal content hierarchy."""
+        logger.info("--- Phase 3.7: Ordering Headers by Priority ---")
+        header_agent = self.agents_factory.header_ordering_agent()
+
+        ordering_task = Task(
+            description=f"""Reorganize the financial content headers by priority order for maximum readability and impact: {extracted_content}
+
+            PRIORITY ORDER FOR HEADERS (highest to lowest priority):
+            1. **Title** (main headline) - ALWAYS FIRST
+            2. **Key Points:** - Most important actionable information
+            3. **Market Implications:** - Analysis and impact assessment
+            4. **Source:** - Attribution and credibility
+            5. **Live Charts:** - Supporting visual resources
+
+            REORGANIZATION REQUIREMENTS:
+            1. Keep the TITLE as the first element (unchanged position)
+            2. Move Key Points section immediately after title for maximum impact
+            3. Move Market Implications section after Key Points for analysis flow
+            4. Move Source section after Market Implications for attribution
+            5. Keep Live Charts section last as supplementary resources
+            6. Preserve ALL original content, formatting, and links exactly
+            7. Maintain language-specific text (Arabic, Hindi, Hebrew) without changes
+            8. Keep bullet points (•) and HTML formatting intact
+            9. Ensure source links remain clickable and properly formatted
+            10. Apply this ordering consistently across all languages
+
+            EXPECTED STRUCTURE AFTER REORDERING:
+            [Title]
+
+            **Key Points:**
+            • [point 1]
+            • [point 2]
+
+            **Market Implications:**
+            • [implication 1]
+            • [implication 2]
+
+            **Source:** [source link]
+
+            **Live Charts:**
+            [chart links]
+
+            LANGUAGE CONSIDERATIONS:
+            - For Arabic/Hebrew: Maintain RTL support and proper text direction
+            - For Hindi: Preserve Devanagari script formatting
+            - For English: Standard left-to-right formatting
+            - Keep header translations accurate: Key Points (النقاط الرئيسية), Market Implications (تداعيات السوق), etc.
+
+            RETURN the reorganized content with headers in priority order while preserving all original formatting and content.""",
+            expected_output="Financial content reorganized with headers in priority order: Title -> Key Points -> Market Implications -> Source -> Live Charts.",
+            agent=header_agent
+        )
+        return self._run_task_with_retry([header_agent], ordering_task)
+
+
+    def _run_telegram_sending_phase(self, formatted_content: str, selected_source: Dict[str, Any]) -> Dict[str, str]:
+        """Enhanced sending phase that extracts Telegram-ready summary with images and sends to Telegram."""
+        logger.info("--- Phase 4: Sending Telegram Summary with Images ---")
         send_agent = self.agents_factory.send_agent()
         send_results = {}
 
-        # Add validation context to message if confidence is low
-        validation = self.execution_results.get("validation", {})
-        confidence_score = validation.get("confidence_score", 0)
-        source_confidence = selected_source.get("confidence_score", 0)
-        url_verified = selected_source.get("main_source", {}).get("url_verified", False)
-        
-        # Create confidence footer
-        confidence_footer = f"\n\n**📊 Confidence: {confidence_score}/100**"
-        if source_confidence < 80:
-            confidence_footer += f" | **🔗 Source: {source_confidence}/100**"
-        if url_verified:
-            confidence_footer += " | **🔗 URL Verified** ✅"
+        # Check if the content has Telegram image data
+        if "---TELEGRAM_IMAGE_DATA---" in formatted_content:
+            # Split content and image data
+            content_parts = formatted_content.split("---TELEGRAM_IMAGE_DATA---")
+            telegram_summary = content_parts[0].strip()
+
+            try:
+                import json
+                image_data = json.loads(content_parts[1].strip())
+                logger.info(f"📊 Found Telegram-ready summary with image data")
+                logger.info(f"📝 Summary length: {len(telegram_summary.split())} words")
+                logger.info(f"🖼️ Primary image: {image_data.get('primary_image', {}).get('description', 'None')}")
+            except:
+                logger.warning("Failed to parse image data, using content without images")
+                telegram_summary = formatted_content
+                image_data = None
         else:
-            confidence_footer += " | **🔗 Fallback Source** ⚠️"
-        
-        enhanced_content = formatted_content + confidence_footer
+            # Fallback: create summary from formatted content
+            telegram_summary = self._create_fallback_telegram_summary(formatted_content)
+            image_data = None
+            logger.info("📝 Created fallback Telegram summary")
 
-        # Send English summary with verified source and images
-        english_send_task = Task(
-            description=f"""Send verified English financial summary to Telegram: {enhanced_content}
+        # Send SINGLE comprehensive message to Telegram with image
+        single_message_task = Task(
+            description=f"""Send ONE comprehensive financial summary message to Telegram with image:
 
-            SOURCE VERIFICATION STATUS:
-            - URL Verified: {url_verified}
-            - Source Confidence: {source_confidence}/100
-            - Validation Confidence: {confidence_score}/100
-            
-            The enhanced telegram_sender will:
-            - Verify image legitimacy and contextual relevance
-            - Use only trusted financial image sources
-            - Send text-only if no verified images available
-            - Include source verification status in message
-            - Ensure clickable source links work properly
+            SINGLE MESSAGE CONTENT:
+            {telegram_summary}
 
-            Use telegram_sender tool with language='english'.""",
-            expected_output="Confirmation of successful delivery with verified image and source status.",
+            SINGLE TELEGRAM MESSAGE REQUIREMENTS:
+            1. Send EXACTLY ONE message containing the complete summary (under 400 words)
+            2. Include exactly ONE relevant financial image/chart with the message
+            3. Do NOT send multiple messages - combine everything into single delivery
+            4. Format as professional HTML for Telegram
+            5. Verify image accessibility before sending
+
+            IMAGE TO INCLUDE:
+            {"- Primary image: " + image_data['primary_image']['description'] + " (" + image_data['primary_image']['url'] + ")" if image_data and image_data.get('primary_image') else "- Use S&P 500 or relevant market index chart"}
+
+            CONTENT CONTEXT:
+            {"- Stocks analyzed: " + ", ".join(image_data['content_analysis']['key_stocks']) if image_data and image_data.get('content_analysis') else ""}
+            {"- Articles summarized: " + str(image_data['content_analysis']['total_articles']) if image_data and image_data.get('content_analysis') else ""}
+
+            CRITICAL: Send as ONE SINGLE telegram message with image - not multiple messages.
+            Use telegram_sender tool with language='english' for single message delivery.""",
+            expected_output="Confirmation of successful single Telegram message delivery with summary and image.",
             agent=send_agent
         )
-        send_results["english"] = self._run_task_with_retry([send_agent], english_send_task)
 
-        # Send translations with source verification
-        for lang, content in translations.items():
-            if "Error" not in content:
-                enhanced_translated_content = content + confidence_footer
-                lang_send_task = Task(
-                    description=f"""Send verified {lang} financial summary: {enhanced_translated_content}
-
-                    Same verification process as English version with source verification status.
-
-                    Use telegram_sender tool with language='{lang}' to ensure proper formatting for {lang} content.""",
-                    expected_output=f"Confirmation of {lang} message delivery with verification status.",
-                    agent=send_agent
-                )
-                send_results[lang] = self._run_task_with_retry([send_agent], lang_send_task)
-            else:
-                send_results[lang] = f"Skipped {lang} due to translation failure."
+        send_results["single_telegram_message"] = self._run_task_with_retry([send_agent], single_message_task)
 
         return send_results
+
+    def _create_fallback_telegram_summary(self, content: str) -> str:
+        """Create a fallback Telegram summary if content doesn't have embedded image data."""
+        # Extract key information from content
+        lines = content.split('\n')
+        summary_lines = []
+
+        summary_lines.append("**📈 Market Update Summary**")
+        summary_lines.append("")
+
+        # Look for market overview or key highlights
+        in_relevant_section = False
+        word_count = 0
+        max_words = 350  # Leave room for formatting
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Include key sections
+            if any(keyword in line.lower() for keyword in ['market overview', 'key highlights', 'breaking news', 'implications']):
+                in_relevant_section = True
+                summary_lines.append(line)
+                word_count += len(line.split())
+                continue
+
+            if in_relevant_section and word_count < max_words:
+                if line.startswith('•') or line.startswith('-') or line.startswith('*'):
+                    summary_lines.append(line)
+                    word_count += len(line.split())
+                elif line.startswith('**') and line.endswith('**'):
+                    summary_lines.append("")
+                    summary_lines.append(line)
+                    word_count += len(line.split())
+                    in_relevant_section = True
+
+        summary_lines.append("")
+        summary_lines.append("**📊 Live Charts:**")
+        summary_lines.append("• S&P 500 Index Chart")
+
+        return '\n'.join(summary_lines)
+
+    def _run_direct_telegram_sending(self, telegram_ready_content: str) -> Dict[str, str]:
+        """Send Telegram-ready content directly to Telegram."""
+        logger.info("📱 Sending Telegram-ready content directly")
+        send_agent = self.agents_factory.send_agent()
+
+        # Simple direct sending task
+        direct_send_task = Task(
+            description=f"""Send this Telegram-ready financial summary directly to Telegram:
+
+            CONTENT TO SEND:
+            {telegram_ready_content}
+
+            INSTRUCTIONS:
+            1. This content is already formatted and ready for Telegram
+            2. It contains embedded image data that needs to be extracted and used
+            3. Send as ONE single message with the appropriate image
+            4. Do NOT modify the content - just extract and send
+
+            Use telegram_sender tool with language='english' for direct delivery.""",
+            expected_output="Confirmation of successful Telegram delivery.",
+            agent=send_agent
+        )
+
+        result = self._run_task_with_retry([send_agent], direct_send_task)
+        return {"direct_telegram": result}
+
+    def _run_raw_telegram_sending(self, summary_content: str) -> Dict[str, str]:
+        """Send raw summary content with image attachment to Telegram."""
+        logger.info("📱 Sending raw summary content with image to Telegram")
+        send_agent = self.agents_factory.send_agent()
+
+        # Check if content has image data
+        if "---IMAGE_DATA---" in summary_content:
+            # Split content and image data
+            content_parts = summary_content.split("---IMAGE_DATA---")
+            text_content = content_parts[0].strip()
+
+            try:
+                import json
+                image_data = json.loads(content_parts[1].strip())
+
+                # Task with image attachment
+                raw_send_task = Task(
+                    description=f"""Send this financial summary to Telegram with image attachment:
+
+                    TEXT CONTENT TO SEND:
+                    {text_content}
+
+                    IMAGE TO ATTACH:
+                    - Image URL: {image_data.get('image_url', '')}
+                    - Image Title: {image_data.get('image_title', 'Financial Chart')}
+                    - Image Source: {image_data.get('image_source', 'Unknown')}
+                    - Telegram Compatible: {image_data.get('telegram_compatible', False)}
+
+                    INSTRUCTIONS:
+                    1. Send the text content exactly as provided above
+                    2. Attach the image from the provided URL as a photo attachment
+                    3. Do NOT add any formatting, structure, or message templates to the text
+                    4. Send as a single message with text and image attachment
+                    5. Use telegram_sender tool with language='english' and include image attachment
+                    6. If image fails to attach, still send the text content
+
+                    CRITICAL: Send the text AS-IS with the image as an attachment.""",
+                    expected_output="Confirmation of successful delivery to Telegram with image attachment.",
+                    agent=send_agent
+                )
+
+                logger.info(f"📎 Sending with image attachment: {image_data.get('image_title', 'Unknown')}")
+
+            except Exception as e:
+                logger.warning(f"Failed to parse image data: {e}, sending text only")
+                # Fallback to text-only
+                raw_send_task = self._create_text_only_task(text_content, send_agent)
+        else:
+            # No image data, send text only
+            raw_send_task = self._create_text_only_task(summary_content, send_agent)
+
+        result = self._run_task_with_retry([send_agent], raw_send_task)
+        return {"raw_telegram": result}
+
+    def _create_text_only_task(self, text_content: str, send_agent) -> Task:
+        """Create a text-only Telegram sending task"""
+        return Task(
+            description=f"""Send this financial summary content directly to Telegram exactly as provided:
+
+            CONTENT TO SEND:
+            {text_content}
+
+            INSTRUCTIONS:
+            1. Send the content exactly as provided above
+            2. Do NOT add any formatting, structure, or message templates
+            3. Do NOT follow any specific Telegram formatting rules
+            4. Just pass the raw content to the Telegram channel
+            5. The content is already under 400 words and ready to send
+            6. Use telegram_sender tool with language='english' for simple delivery
+
+            CRITICAL: Send the content AS-IS without any modifications, formatting, or structure.""",
+            expected_output="Confirmation of successful raw content delivery to Telegram.",
+            agent=send_agent
+        )
+

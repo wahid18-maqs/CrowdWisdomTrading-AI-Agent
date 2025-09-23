@@ -245,3 +245,5 @@ videos/
 !config/example_*.yaml
 
 test_workflow.py
+
+output/

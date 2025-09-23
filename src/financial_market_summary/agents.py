@@ -38,11 +38,11 @@ class FinancialAgents:
         )
             
     def search_agent(self) -> Agent:
-        """Creates an agent for searching financial news."""
+        """Creates an agent for comprehensive financial news searching across all trusted domains."""
         return Agent(
-            role="Financial News Searcher",
-            goal="Search for the latest US financial news from the past 2 hours, focusing on major stock movements, earnings, and economic data from verified sources.",
-            backstory="You are a skilled financial researcher with expertise in identifying the most relevant and recent market news using advanced search tools, ensuring all sources are from trusted financial outlets.",
+            role="Comprehensive Financial News Searcher",
+            goal="Search comprehensively across ALL trusted financial domains for the latest US financial news, ensuring complete market coverage from major outlets, specialized sites, premium sources, and government agencies.",
+            backstory="You are an expert financial researcher specialized in comprehensive multi-domain news aggregation. You systematically search across all major financial news outlets (Yahoo Finance, CNBC, Reuters, Bloomberg), specialized sites (Seeking Alpha, Benzinga), premium sources (WSJ, FT, Barron's), market data providers (NASDAQ, Morningstar), and government sources (SEC, Fed, Treasury) to ensure no critical market news is missed. You validate source diversity and URL accessibility.",
             tools=[self.tavily_tool],
             llm=self.llm,
             verbose=True
@@ -52,7 +52,7 @@ class FinancialAgents:
         """Creates an agent for summarizing financial news."""
         return Agent(
             role="Financial News Summarizer",
-            goal="Analyze financial news and create a concise, structured market summary under 500 words for Telegram with accurate data and stock symbols.",
+            goal="Analyze financial news and create a concise, structured market summary under 300 words for Telegram with accurate data and stock symbols.",
             backstory="You are an expert financial analyst who excels at distilling complex market data into clear, concise summaries with key points and implications, ensuring all numbers and stock symbols are accurate.",
             tools=[],
             llm=self.llm,
@@ -92,12 +92,24 @@ class FinancialAgents:
             verbose=True
         )
 
-    def translation_agent(self) -> Agent:
-        """Creates an agent for translating financial summaries while preserving source links."""
+
+    def content_extractor_agent(self) -> Agent:
+        """Creates an agent that extracts formatted content from agent final answers."""
         return Agent(
-            role="Financial Content Translator with Source Preservation",
-            goal="Translate financial summaries into multiple languages while preserving stock symbols, numbers, markdown formatting, and source links with verification indicators.",
-            backstory="You are a multilingual financial translator with expertise in maintaining accuracy and professional terminology across languages, ensuring that source links, verification indicators, and all financial data remain intact during translation.",
+            role="Agent Content Extractor and Formatter",
+            goal="Extract properly formatted financial content with verified source links from agent final answers and prepare it for Telegram delivery, preserving all source information, links, and verification status.",
+            backstory="You are a content extraction specialist who can parse agent outputs and extract the final formatted content with proper source attribution, markdown formatting, and verification indicators. You ensure that source links from agent answers are preserved exactly as they appear.",
+            tools=[],
+            llm=self.llm,
+            verbose=True
+        )
+
+    def header_ordering_agent(self) -> Agent:
+        """Creates an agent for ordering message headers by priority for all languages."""
+        return Agent(
+            role="Financial Content Header Organizer",
+            goal="Reorganize financial message headers and sections by priority order to optimize readability and information hierarchy for Telegram delivery across all languages.",
+            backstory="You are a content organization specialist who understands financial information hierarchy and user reading patterns. You optimize content structure by prioritizing the most important information first, ensuring that headers and sections are arranged for maximum impact and readability across English, Arabic, Hindi, and Hebrew languages.",
             tools=[],
             llm=self.llm,
             verbose=True

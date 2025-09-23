@@ -6,7 +6,7 @@ An AI-powered financial news aggregation and distribution system built with Crew
 
 - **Real-time Financial News Search**: Aggregates latest US market news from trusted sources
 - **AI-Powered Summarization**: Creates concise, actionable market summaries under 500 words
-- **Multi-language Support**: Translates content to Arabic, Hindi, and Hebrew
+- **English-Only Content**: Focused content delivery in English
 - **Visual Content Integration**: Automatically finds and includes relevant financial charts and graphs
 - **Telegram Distribution**: Sends formatted summaries to designated Telegram channels
 - **Rate Limiting & Error Handling**: Built-in API quota management and retry mechanisms
@@ -19,7 +19,6 @@ The system uses a multi-agent architecture powered by CrewAI:
 - **Search Agent**: Gathers financial news from multiple sources (Tavily, Serper APIs)
 - **Summary Agent**: Creates professional market analysis using Gemini LLM
 - **Formatting Agent**: Enhances content with relevant charts and visual elements
-- **Translation Agent**: Provides accurate multilingual translations
 - **Distribution Agent**: Manages Telegram delivery with retry logic
 
 ##  Prerequisites
@@ -88,7 +87,6 @@ Customize in `LLM_config.py`:
 - `max_summary_words`: Summary length limit (default: 500)
 - `max_search_results`: Number of news articles to process (default: 8)
 - `search_hours_back`: Time window for news search (default: 2 hours)
-- `languages`: Target translation languages
 
 ##  Usage
 
@@ -116,8 +114,7 @@ The system generates:
    - Tomorrow's Watch
 
 2. **Visual Content**: 1-2 relevant financial charts or graphs
-3. **Translations**: Accurate translations preserving financial terminology
-4. **Telegram Delivery**: Formatted messages sent to configured channels
+3. **Telegram Delivery**: Formatted messages sent to configured channels
 
 ##  Troubleshooting
 
@@ -132,9 +129,6 @@ The system generates:
 - Ensure all required keys are in `.env` file
 - Verify API key permissions and quotas
 
-**Translation Failures**
-- Stock symbols and numbers are preserved in original language
-- Financial terms may be kept in English with local language in parentheses
 
 ##  Workflow Process
 
