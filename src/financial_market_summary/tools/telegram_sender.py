@@ -789,22 +789,8 @@ class EnhancedTelegramSender(BaseTool):
             self._extract_additional_points(data, lines, "key_points", 3 - len(data["key_points"]))
         if len(data["market_implications"]) < 3:
             self._extract_additional_points(data, lines, "market_implications", 3 - len(data["market_implications"]))
-        if len(data["key_points"]) < 3:
-            fallback_points = [
-                "Market analysis in progress",
-                "Key developments being monitored",
-                "Financial trends under review"
-            ]
-            needed = 3 - len(data["key_points"])
-            data["key_points"].extend(fallback_points[:needed])
-        if len(data["market_implications"]) < 3:
-            fallback_implications = [
-                "Market impact assessment ongoing",
-                "Investment strategies under evaluation",
-                "Economic indicators being analyzed"
-            ]
-            needed = 3 - len(data["market_implications"])
-            data["market_implications"].extend(fallback_implications[:needed])
+        # No more generic fallbacks - content should come from tavily search
+        logger.info(f"📊 Final content: {len(data['key_points'])} key points, {len(data['market_implications'])} implications")
 
     def _extract_additional_points(self, data: Dict[str, Any], lines: List[str], section_type: str, needed_count: int):
         extracted = 0
@@ -1177,6 +1163,56 @@ class EnhancedTelegramSender(BaseTool):
             logger.warning(f"❌ Error testing image accessibility: {url} - {e}")
             return False
 
+    def _ensure_message_with_footer_fits(self, message: str) -> str:
+        """Ensure message fits within 4096 characters while preserving live charts footer."""
+        if len(message) <= 4096:
+            return message
+
+        # Check if message has live charts footer
+        footer_patterns = [
+            "<b>Live Charts:</b>",
+            "المخططات المباشرة:",
+            "चार्ट:",
+            "גרפים:"
+        ]
+
+        footer_start_pos = -1
+        for pattern in footer_patterns:
+            pos = message.find(pattern)
+            if pos != -1:
+                footer_start_pos = pos
+                break
+
+        if footer_start_pos == -1:
+            # No footer found, simple truncation
+            logger.warning(f"⚠️ Message truncated to 4096 chars (no footer found)")
+            return message[:4096]
+
+        # Extract footer
+        footer = message[footer_start_pos:]
+        footer_length = len(footer)
+
+        # Calculate available space for main content
+        available_space = 4096 - footer_length - 10  # 10 chars buffer for "...\n\n"
+
+        if available_space < 100:
+            # Footer too long, truncate footer itself
+            logger.warning(f"⚠️ Footer too long, truncating to fit")
+            footer = footer[:300] + "..."
+            footer_length = len(footer)
+            available_space = 4096 - footer_length - 10
+
+        # Truncate main content and add footer
+        main_content = message[:footer_start_pos]
+        if len(main_content) > available_space:
+            main_content = main_content[:available_space].rsplit('\n', 1)[0]  # Cut at last complete line
+            truncated_message = main_content + "...\n\n" + footer
+        else:
+            truncated_message = message
+
+        logger.info(f"📏 Message length: {len(message)} → {len(truncated_message)} chars (footer preserved)")
+        return truncated_message
+
     def _send_message(self, message: str) -> bool:
         try:
             if isinstance(message, str):
@@ -1184,9 +1220,12 @@ class EnhancedTelegramSender(BaseTool):
             else:
                 message_encoded = str(message)
 
+            # Ensure message fits within Telegram limit while preserving footer
+            message_encoded = self._ensure_message_with_footer_fits(message_encoded)
+
             payload = {
                 "chat_id": self.chat_id,
-                "text": message_encoded[:4096],
+                "text": message_encoded,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": False
             }

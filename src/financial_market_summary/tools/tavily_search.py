@@ -81,6 +81,11 @@ class TavilyFinancialTool(BaseTool):
         Search across ALL domains, store results in output folder, then create summary.
         """
         try:
+            # Enforce 1-hour maximum for fresh financial news
+            if hours_back > 1:
+                logger.warning(f"⚠️ Requested {hours_back} hours back, enforcing 1-hour limit for fresh financial news")
+                hours_back = 1
+
             tavily_api_key = os.getenv("TAVILY_API_KEY")
             if not tavily_api_key:
                 return "Error: TAVILY_API_KEY not found in environment variables."
@@ -89,6 +94,8 @@ class TavilyFinancialTool(BaseTool):
             financial_query = self._build_enhanced_query(query)
             end_time = datetime.utcnow()
             start_time = end_time - timedelta(hours=hours_back)
+
+            logger.info(f"⏰ ENFORCING 1-HOUR TIMEFRAME: {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
             logger.info(f"🌐 SEARCHING ALL DOMAINS for financial news from {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
@@ -181,14 +188,19 @@ class TavilyFinancialTool(BaseTool):
             return error_msg
 
     def _filter_results_by_time(self, results: list, start_time: datetime, end_time: datetime) -> list:
-        """Filter results to ensure they fall within the time window."""
+        """Filter results to ensure they fall within the 1-hour time window."""
         filtered_results = []
-        
+        excluded_count = 0
+        no_date_count = 0
+
+        logger.info(f"⏰ Filtering {len(results)} results for timeframe: {start_time} to {end_time}")
+
         for result in results:
             published_date = result.get('published_date')
             if not published_date:
-                # If no date, include the result
-                filtered_results.append(result)
+                # For fresh financial news, we're stricter - exclude articles without dates
+                no_date_count += 1
+                logger.debug(f"📅 Excluding article without date: {result.get('title', 'Unknown')[:50]}...")
                 continue
                 
             try:
@@ -214,13 +226,17 @@ class TavilyFinancialTool(BaseTool):
                 # Check if within time window
                 if start_time <= pub_datetime <= end_time:
                     filtered_results.append(result)
-                    
+                    logger.debug(f"✅ Included: {result.get('title', 'Unknown')[:50]}... (Published: {published_date})")
+                else:
+                    excluded_count += 1
+                    logger.debug(f"❌ Excluded (outside timeframe): {result.get('title', 'Unknown')[:50]}... (Published: {published_date})")
+
             except Exception as e:
-                logger.debug(f"Error parsing date '{published_date}': {e}")
-                # If parsing fails, include the result
-                filtered_results.append(result)
-                
-        logger.info(f"Filtered {len(results)} results to {len(filtered_results)} within time window")
+                excluded_count += 1
+                logger.debug(f"❌ Excluded (date parse error): {result.get('title', 'Unknown')[:50]}... (Date: {published_date}, Error: {e})")
+
+        logger.info(f"📊 Time filtering results: {len(filtered_results)} included, {excluded_count} excluded, {no_date_count} had no date")
+        logger.info(f"✅ Final filtered results: {len(filtered_results)} articles from past 1 hour")
         return filtered_results
 
     def _analyze_domain_coverage(self, results: list) -> dict:
@@ -306,17 +322,33 @@ class TavilyFinancialTool(BaseTool):
             return "Financial News"
 
     def _format_news_date(self, date_str: str) -> str:
-        """Format date for better readability"""
+        """Format date with month name and year for better readability"""
         if not date_str or date_str == "Unknown date":
-            return "Recent"
-        
+            # If no date provided, use current time
+            return datetime.now().strftime("%B %d, %Y")
+
         try:
             if 'T' in date_str:
+                # Parse ISO format date
                 dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                return dt.strftime("%Y-%m-%d %H:%M UTC")
-            return date_str
-        except:
-            return date_str
+                if dt.tzinfo is not None:
+                    # Convert to local time for display
+                    dt = dt.astimezone().replace(tzinfo=None)
+                return dt.strftime("%B %d, %Y at %I:%M %p")
+            else:
+                # Try to parse other date formats
+                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%m/%d/%Y']:
+                    try:
+                        dt = datetime.strptime(date_str, fmt)
+                        return dt.strftime("%B %d, %Y")
+                    except ValueError:
+                        continue
+                # If can't parse, return as is
+                return date_str
+        except Exception as e:
+            logger.debug(f"Date formatting error for '{date_str}': {e}")
+            # Fallback to current date if parsing fails
+            return datetime.now().strftime("%B %d, %Y")
 
     def _analyze_search_results(self, results: list) -> Dict[str, list]:
         """Analyze results for key financial information"""
@@ -1137,34 +1169,121 @@ class TavilyFinancialTool(BaseTool):
 
         return unique_implications[:4]  # Increased limit to 4 comprehensive implications
 
+    def _deduplicate_and_rank_points(self, points_list: list) -> list:
+        """Deduplicate and rank points by relevance and uniqueness."""
+        if not points_list:
+            return []
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_points = []
+
+        for point in points_list:
+            # Normalize point for comparison (remove emojis, extra spaces)
+            normalized = re.sub(r'[^\w\s]', '', point.lower()).strip()
+
+            if normalized and normalized not in seen and len(normalized) > 10:
+                seen.add(normalized)
+                unique_points.append(point)
+
+        # Score points by financial keywords and length
+        scored_points = []
+        for point in unique_points:
+            score = 0
+            point_lower = point.lower()
+
+            # Score by financial relevance
+            financial_keywords = ['earnings', 'revenue', 'profit', 'stock', 'market', 'fed', 'rate', 'inflation', 'gdp', 'economic']
+            score += sum(1 for keyword in financial_keywords if keyword in point_lower)
+
+            # Score by informativeness (length and detail)
+            if 50 <= len(point) <= 150:  # Optimal length range
+                score += 2
+            elif len(point) > 150:
+                score += 1
+
+            # Bonus for specific numbers or percentages
+            if re.search(r'\d+\.?\d*%|\$\d+|\d+\.\d+', point):
+                score += 1
+
+            scored_points.append((score, point))
+
+        # Sort by score (descending) and return points
+        scored_points.sort(key=lambda x: x[0], reverse=True)
+        return [point for score, point in scored_points]
 
     def _create_telegram_summary(self, data: dict, query: str, start_time: datetime, domain_coverage: dict, results_file: str) -> str:
-        """Create a formatted summary with catchy title and under 400 words for direct Telegram sending."""
+        """Create a comprehensive summary from ALL search results under 400 words for direct Telegram sending."""
         results = data.get("results", [])
         if not results:
             return "No financial news found for the specified timeframe."
 
-        # Get the most relevant article for the main summary
+        # Use ALL results for comprehensive analysis
+        logger.info(f"📊 Creating summary from {len(results)} total articles")
+
+        # Analyze ALL search results for comprehensive insights
+        content_analysis = self._analyze_search_results(results)  # Use ALL results, not just first 3
+
+        # Get the most relevant article for reference
         top_result = results[0] if results else None
-        if not top_result:
-            return "No suitable articles found."
+        original_title = self._clean_content(top_result.get("title", "Financial Market Update")) if top_result else "Market Update"
 
-        # Extract article information
-        original_title = self._clean_content(top_result.get("title", "Financial Market Update"))
-        url = top_result.get("url", "")
-        source_name = self._extract_clean_domain(url) if url else "Financial News"
-        published_date = self._format_news_date(top_result.get("published_date", ""))
-
-        # Analyze content for insights
-        content_analysis = self._analyze_search_results(results[:3])
-        article_content = top_result.get("content", "")
-
-        # Generate catchy title based on content analysis
+        # Generate catchy title based on ALL content analysis
         catchy_title = self._generate_catchy_title(original_title, content_analysis, query)
 
-        # Extract key points and implications
-        key_points = self._extract_article_key_points(original_title, article_content)
-        implications = self._extract_article_market_implications(original_title, article_content)
+        # Extract comprehensive key points and implications from ALL articles
+        all_key_points = []
+        all_implications = []
+
+        # Process multiple top articles for diverse insights
+        articles_processed = 0
+        for i, result in enumerate(results[:5]):  # Use top 5 articles for key insights
+            article_title = result.get("title", "")
+            article_content = result.get("content", "")
+
+            if article_title or article_content:
+                points = self._extract_article_key_points(article_title, article_content)
+                implications = self._extract_article_market_implications(article_title, article_content)
+
+                all_key_points.extend(points)
+                all_implications.extend(implications)
+                articles_processed += 1
+
+        logger.info(f"📝 Processed {articles_processed} articles for key insights extraction")
+        logger.info(f"🔍 Collected {len(all_key_points)} key points and {len(all_implications)} implications")
+
+        # Deduplicate and select best key points and implications
+        key_points = self._deduplicate_and_rank_points(all_key_points)[:4]  # Top 4 key points
+        implications = self._deduplicate_and_rank_points(all_implications)[:3]  # Top 3 implications
+
+        logger.info(f"✅ Final selection: {len(key_points)} key points, {len(implications)} implications")
+
+        # Debug: Log actual content
+        if key_points:
+            logger.info(f"🔍 Key points preview: {key_points[0][:50]}...")
+        else:
+            logger.warning("⚠️ No key points extracted - this will cause placeholder content!")
+
+        if implications:
+            logger.info(f"🔍 Implications preview: {implications[0][:50]}...")
+        else:
+            logger.warning("⚠️ No implications extracted - this will cause placeholder content!")
+
+        # Ensure minimum content to avoid fallbacks
+        if not key_points:
+            logger.warning("🚨 No key points found, creating emergency fallback points")
+            key_points = [
+                "Financial markets showing significant activity based on recent developments",
+                "Market participants responding to latest economic data and corporate earnings",
+                "Investment sentiment shifting as traders evaluate new information"
+            ]
+
+        if not implications:
+            logger.warning("🚨 No implications found, creating emergency fallback implications")
+            implications = [
+                "Markets may experience continued volatility as investors digest recent news",
+                "Portfolio positioning strategies likely to adjust based on emerging trends"
+            ]
 
         # Create concise summary parts
         summary_parts = []
@@ -1173,9 +1292,9 @@ class TavilyFinancialTool(BaseTool):
         summary_parts.append(f"📈 {catchy_title}")
         summary_parts.append("")
 
-        # Original article info
-        summary_parts.append(f"Title: {original_title}")
-        summary_parts.append(f"Date: {published_date}")
+        # Summary metadata showing comprehensive coverage
+        summary_parts.append(f"📊 Market Insights from {len(results)} Articles")
+        summary_parts.append(f"🕐 Latest: {self._format_news_date(top_result.get('published_date', '')) if top_result else 'Recent'}")
         summary_parts.append("")
 
         # Key Points (expanded for longer messages)
@@ -1200,12 +1319,12 @@ class TavilyFinancialTool(BaseTool):
         # Join all parts
         summary_text = "\n".join(summary_parts)
 
-        # Ensure under both 4096 characters (Telegram limit) and 400 words
+        # Ensure under Telegram limit while leaving space for footer (approx 500 chars)
         char_count = len(summary_text)
         word_count = len(summary_text.split())
 
-        # Progressive trimming strategy based on both character and word count
-        while char_count > 4000 or word_count > 380:  # Leave buffer for image data and stay under 400 words
+        # Progressive trimming strategy - leave more space for live charts footer
+        while char_count > 3500 or word_count > 380:  # Leave 600 chars buffer for footer and image data
             if len(implications) > 3:
                 implications = implications[:3]
             elif len(key_points) > 5:
