@@ -1257,79 +1257,161 @@ class EnhancedTelegramSender(BaseTool):
             return False
 
     def _process_telegram_ready_content(self, content: str, language: str) -> str:
-        """Process content that has embedded Telegram image data and send with images."""
+        """Process content with two-message format and send both messages."""
         try:
-            # Split content and image data
-            content_parts = content.split("---TELEGRAM_IMAGE_DATA---")
-            message_content = content_parts[0].strip()
+            # Check if this is the new two-message format
+            if "=== TELEGRAM_TWO_MESSAGE_FORMAT ===" in content:
+                return self._handle_two_message_format(content, language)
 
-            try:
-                import json
-                image_data_raw = json.loads(content_parts[1].strip())
-                logger.info(f"📊 Extracted image data: Primary image - {image_data_raw.get('primary_image', {}).get('description', 'None')}")
-            except:
-                logger.warning("Failed to parse embedded image data, sending without images")
-                image_data_raw = None
-
-            # Clean and format the message content
-            message = self._convert_markdown_to_telegram_html(message_content)
-            message = self._add_live_charts_section(message)
-            message = self._validate_html_structure(message)
-
-            # Prepare image data for Telegram
-            image_data = {}
-            if image_data_raw and image_data_raw.get('primary_image'):
-                primary_image = image_data_raw['primary_image']
-
-                # Verify image URL accessibility
-                image_url = primary_image.get('url', '')
-                if self._verify_image_url(image_url):
-                    image_data = {
-                        "url": image_url,
-                        "caption": primary_image.get('description', 'Financial Chart'),
-                        "type": primary_image.get('type', 'financial_chart'),
-                        "verified": True
-                    }
-                    logger.info(f"✅ Primary image verified: {image_data['caption']}")
-                else:
-                    # Try backup images
-                    backup_images = image_data_raw.get('backup_images', [])
-                    for backup in backup_images:
-                        backup_url = backup.get('url', '')
-                        if self._verify_image_url(backup_url):
-                            image_data = {
-                                "url": backup_url,
-                                "caption": backup.get('description', 'Financial Chart'),
-                                "type": backup.get('type', 'financial_chart'),
-                                "verified": True
-                            }
-                            logger.info(f"✅ Using backup image: {image_data['caption']}")
-                            break
-
-                    # Final fallback to S&P 500 chart
-                    if not image_data:
-                        sp500_url = "https://chart.yahoo.com/z?s=%5EGSPC&t=1d&q=l&l=on&z=s&p=s"
-                        image_data = {
-                            "url": sp500_url,
-                            "caption": "S&P 500 Index Chart",
-                            "type": "market_index",
-                            "verified": True
-                        }
-                        logger.info("📊 Using S&P 500 fallback image")
-
-            # Send content with image
-            word_count = len(message.split())
-            logger.info(f"📱 Sending Telegram-ready summary: {word_count} words with image: {image_data.get('caption', 'None')}")
-
-            result = self._send_content(message, image_data)
-            return result
+            # Fallback to old single-message format
+            return self._handle_single_message_format(content, language)
 
         except Exception as e:
             logger.error(f"Failed to process Telegram-ready content: {e}")
-            # Fallback to sending just the text content
+            # Ultimate fallback
             message_content = content.split("---TELEGRAM_IMAGE_DATA---")[0].strip()
             message = self._convert_markdown_to_telegram_html(message_content)
             return self._send_content(message, {})
+
+    def _handle_two_message_format(self, content: str, language: str) -> str:
+        """Handle the new two-message format for Telegram delivery."""
+        try:
+            logger.info("📱 Processing two-message format for Telegram delivery")
+
+            # Extract the two messages
+            parts = content.split("=== TELEGRAM_TWO_MESSAGE_FORMAT ===")[1]
+            sections = parts.split("---TELEGRAM_IMAGE_DATA---")
+
+            message_section = sections[0].strip()
+            image_data_raw = {}
+
+            if len(sections) > 1:
+                try:
+                    image_data_raw = json.loads(sections[1].strip())
+                except:
+                    logger.warning("Failed to parse image data")
+
+            # Extract individual messages
+            lines = message_section.split('\n')
+            image_caption = ""
+            full_summary = ""
+            current_section = None
+
+            for line in lines:
+                if line.startswith("Message 1 (Image Caption):"):
+                    current_section = "caption"
+                    continue
+                elif line.startswith("Message 2 (Full Summary):"):
+                    current_section = "summary"
+                    continue
+
+                if current_section == "caption":
+                    image_caption += line + "\n"
+                elif current_section == "summary":
+                    full_summary += line + "\n"
+
+            image_caption = image_caption.strip()
+            full_summary = full_summary.strip()
+
+            logger.info(f"📝 Extracted messages:")
+            logger.info(f"   Caption: {len(image_caption)} chars")
+            logger.info(f"   Summary: {len(full_summary)} chars")
+
+            # Prepare image data
+            image_data = {}
+            if image_data_raw and image_data_raw.get('primary_image'):
+                primary_image = image_data_raw['primary_image']
+                image_url = primary_image.get('url', '')
+
+                if image_url and self._verify_image_url(image_url):
+                    image_data = {
+                        "url": image_url,
+                        "title": primary_image.get('description', 'Financial Chart'),
+                        "telegram_compatible": primary_image.get('telegram_compatible', True)
+                    }
+                    logger.info(f"✅ Image verified: {image_data['title']}")
+
+            # Send Message 1: Image with Caption (ONLY if image is available and accessible)
+            message1_success = False
+            has_valid_image = False
+
+            if image_data and image_data.get("url"):
+                has_valid_image = True
+                logger.info("📷 Sending Message 1: Image with Caption")
+                message1_success = self._send_photo(image_data["url"], image_caption)
+                if message1_success:
+                    logger.info("✅ Message 1 (Image + Caption) sent successfully")
+                    # Add delay between messages
+                    import time
+                    time.sleep(2)
+                else:
+                    logger.warning("❌ Message 1 failed - image not accessible, skipping image message")
+                    has_valid_image = False
+
+            # Send Message 2: Full Summary (always send)
+            logger.info("📄 Sending Message 2: Full Summary")
+            full_summary_formatted = self._convert_markdown_to_telegram_html(full_summary)
+            full_summary_formatted = self._validate_html_structure(full_summary_formatted)
+
+            message2_success = self._send_message(full_summary_formatted)
+
+            # Results based on what actually happened
+            if has_valid_image and message1_success and message2_success:
+                return "✅ Two messages sent successfully: Image with caption + Full summary"
+            elif not has_valid_image and message2_success:
+                logger.info("📄 No image available - sent full summary only")
+                return "✅ Full summary sent successfully (no image available)"
+            elif has_valid_image and not message1_success and message2_success:
+                logger.info("📄 Image failed but summary sent - single message mode")
+                return "✅ Full summary sent successfully (image failed to send)"
+            elif message2_success:
+                return "✅ Full summary sent successfully"
+            else:
+                return "❌ Failed to send messages"
+
+        except Exception as e:
+            logger.error(f"Error in two-message format: {e}")
+            return f"Error processing two-message format: {e}"
+
+    def _handle_single_message_format(self, content: str, language: str) -> str:
+        """Handle the old single-message format (fallback)."""
+        # Split content and image data
+        content_parts = content.split("---TELEGRAM_IMAGE_DATA---")
+        message_content = content_parts[0].strip()
+
+        try:
+            image_data_raw = json.loads(content_parts[1].strip()) if len(content_parts) > 1 else {}
+            logger.info(f"📊 Extracted image data: Primary image - {image_data_raw.get('primary_image', {}).get('description', 'None')}")
+        except:
+            logger.warning("Failed to parse embedded image data, sending without images")
+            image_data_raw = None
+
+        # Clean and format the message content
+        message = self._convert_markdown_to_telegram_html(message_content)
+        message = self._add_live_charts_section(message)
+        message = self._validate_html_structure(message)
+
+        # Prepare image data for Telegram
+        image_data = {}
+        if image_data_raw and image_data_raw.get('primary_image'):
+            primary_image = image_data_raw['primary_image']
+
+            # Verify image URL accessibility
+            image_url = primary_image.get('url', '')
+            if self._verify_image_url(image_url):
+                image_data = {
+                    "url": image_url,
+                    "title": primary_image.get('description', 'Financial Chart'),
+                    "telegram_compatible": True
+                }
+                logger.info(f"✅ Primary image verified: {image_data['title']}")
+
+        # Send content with image
+        word_count = len(message.split())
+        logger.info(f"📱 Sending single message: {word_count} words with image: {image_data.get('title', 'None')}")
+
+        result = self._send_content(message, image_data)
+        return result
 
     def _verify_image_url(self, url: str) -> bool:
         """Verify that an image URL is accessible."""

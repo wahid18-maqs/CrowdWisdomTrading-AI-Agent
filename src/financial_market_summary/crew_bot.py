@@ -626,34 +626,41 @@ class FinancialMarketCrew:
             return {"status": "failed", "error": error_msg}
 
     def _run_search_phase(self) -> str:
-        """Search phase that creates summary under 400 words."""
-        logger.info("--- Phase 1: Searching for Real-Time News (Last 1 Hour) ---")
+        """Search phase that creates two-message format summary."""
+        logger.info("--- Phase 1: Searching for Financial News (Last 24 Hours) ---")
         search_agent = self.agents_factory.search_agent()
         search_task = Task(
-            description="""Search comprehensively across ALL domains for the latest US financial news and create a simple summary under 400 words.
+            description="""Search comprehensively for the latest US financial news and create a two-message format summary.
 
             SEARCH AND SUMMARIZE:
-            - Search across ALL domains without restrictions for maximum financial news coverage
+            - Search across ALL domains for comprehensive financial news coverage (24-hour timeframe)
             - Store search results in output folder for archiving
-            - Create a SIMPLE SUMMARY under 400 words for direct Telegram sending
+            - Create a TWO-MESSAGE FORMAT summary for Telegram delivery
             - Focus on key market movements, earnings, Fed policy, notable stocks
-            - Include 3-5 key points and 3-5 market implications in the summary
-            - No complex formatting - just plain text content ready for Telegram
+            - Generate both: short image caption (with emojis) + full comprehensive summary
 
             SEARCH STRATEGY:
             1. Use tavily_financial_search tool with NO domain restrictions
             2. Search terms: "US stock market financial news earnings Fed policy"
-            3. Gather comprehensive news from all available sources
-            4. Store complete results in output folder
-            5. Generate simple, concise summary under 400 words
+            3. Search timeframe: Last 24 hours (not just 1 hour to ensure results)
+            4. Gather comprehensive news from all available sources
+            5. Store complete results in output folder
+            6. Generate two-message format output
 
-            SUMMARY REQUIREMENTS:
-            - Plain text summary under 400 words
-            - Include market overview, key points, market implications
-            - Mention key stocks and notable movers
-            - List source information
-            - Ready for direct Telegram sending without additional formatting""",
-            expected_output="Simple financial news summary under 400 words ready for direct Telegram sending, with search results stored in output folder.",
+            TWO-MESSAGE FORMAT REQUIREMENTS:
+            1. Message 1 (Image Caption): Short, engaging caption with emojis (≤150 words, ≤1024 chars)
+               - Include catchy title with emoji
+               - 3 key highlights with appropriate emojis
+               - End with "Full summary below ⬇️"
+
+            2. Message 2 (Full Summary): Comprehensive analysis (≤400 words, ≤4096 chars)
+               - Professional title (no emojis)
+               - Key Points section (4-6 bullet points)
+               - Market Implications section (3-5 bullet points)
+               - Live Chart reference
+
+            OUTPUT FORMAT: Return the new two-message format that the telegram_sender can process""",
+            expected_output="Two-message format financial summary ready for Telegram delivery with search results stored in output folder.",
             agent=search_agent
         )
         return self._run_task_with_retry([search_agent], search_task)
@@ -947,54 +954,56 @@ class FinancialMarketCrew:
         return {"direct_telegram": result}
 
     def _run_raw_telegram_sending(self, summary_content: str) -> Dict[str, str]:
-        """Send raw summary content with image attachment to Telegram."""
-        logger.info("📱 Sending raw summary content with image to Telegram")
+        """Send summary content using the new two-message format to Telegram."""
+        logger.info("📱 Sending summary content to Telegram (supports two-message format)")
         send_agent = self.agents_factory.send_agent()
 
-        # Check if content has image data
-        if "---IMAGE_DATA---" in summary_content:
-            # Split content and image data
-            content_parts = summary_content.split("---IMAGE_DATA---")
-            text_content = content_parts[0].strip()
+        # Check if content has the new two-message format or old image data format
+        if "=== TELEGRAM_TWO_MESSAGE_FORMAT ===" in summary_content:
+            logger.info("🎯 Detected new two-message format, sending directly")
+            # New two-message format - send directly
+            raw_send_task = Task(
+                description=f"""Send this Telegram-ready content using the new two-message format:
 
-            try:
-                import json
-                image_data = json.loads(content_parts[1].strip())
+                CONTENT TO SEND:
+                {summary_content}
 
-                # Task with image attachment
-                raw_send_task = Task(
-                    description=f"""Send this financial summary to Telegram with image attachment:
+                INSTRUCTIONS:
+                1. This content is in the new two-message format and ready for Telegram
+                2. The telegram_sender will automatically handle the two-message delivery
+                3. It will send Message 1 (image with caption) if image is available
+                4. It will always send Message 2 (full summary)
+                5. Use telegram_sender tool with language='english'
+                6. Do NOT modify the content format
 
-                    TEXT CONTENT TO SEND:
-                    {text_content}
+                The telegram_sender will parse this format and deliver appropriately.""",
+                expected_output="Confirmation of successful two-message format delivery to Telegram.",
+                agent=send_agent
+            )
 
-                    IMAGE TO ATTACH:
-                    - Image URL: {image_data.get('image_url', '')}
-                    - Image Title: {image_data.get('image_title', 'Financial Chart')}
-                    - Image Source: {image_data.get('image_source', 'Unknown')}
-                    - Telegram Compatible: {image_data.get('telegram_compatible', False)}
+        elif "---TELEGRAM_IMAGE_DATA---" in summary_content:
+            logger.info("📊 Detected old format with embedded image data")
+            # Old format with embedded image data - send directly
+            raw_send_task = Task(
+                description=f"""Send this Telegram-ready content with embedded image data:
 
-                    INSTRUCTIONS:
-                    1. Send the text content exactly as provided above
-                    2. Attach the image from the provided URL as a photo attachment
-                    3. Do NOT add any formatting, structure, or message templates to the text
-                    4. Send as a single message with text and image attachment
-                    5. Use telegram_sender tool with language='english' and include image attachment
-                    6. If image fails to attach, still send the text content
+                CONTENT TO SEND:
+                {summary_content}
 
-                    CRITICAL: Send the text AS-IS with the image as an attachment.""",
-                    expected_output="Confirmation of successful delivery to Telegram with image attachment.",
-                    agent=send_agent
-                )
+                INSTRUCTIONS:
+                1. This content has embedded Telegram image data
+                2. Use telegram_sender tool with language='english' to handle the embedded data
+                3. The tool will extract and process the image data automatically
+                4. Send as provided without modifications
 
-                logger.info(f"📎 Sending with image attachment: {image_data.get('image_title', 'Unknown')}")
+                The telegram_sender will handle image processing automatically.""",
+                expected_output="Confirmation of successful delivery with embedded image data to Telegram.",
+                agent=send_agent
+            )
 
-            except Exception as e:
-                logger.warning(f"Failed to parse image data: {e}, sending text only")
-                # Fallback to text-only
-                raw_send_task = self._create_text_only_task(text_content, send_agent)
         else:
-            # No image data, send text only
+            logger.info("📝 No special format detected, sending as plain text")
+            # No special format, send as plain text
             raw_send_task = self._create_text_only_task(summary_content, send_agent)
 
         result = self._run_task_with_retry([send_agent], raw_send_task)

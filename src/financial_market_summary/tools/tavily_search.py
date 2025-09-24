@@ -21,7 +21,7 @@ class TavilySearchInput(BaseModel):
 
     query: str = Field(..., description="The search query for financial news.")
     hours_back: int = Field(
-        default=1, description="Number of hours back to search for news."
+        default=24, description="Number of hours back to search for news."
     )
     max_results: int = Field(
         default=10, description="The maximum number of search results to return."
@@ -76,16 +76,24 @@ class TavilyFinancialTool(BaseTool):
             "treasury.gov"
         ]
 
-    def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
+    def _safe_format_template(self, template: str, **kwargs) -> str:
+        """Safely format template strings with error handling."""
+        try:
+            return template.format(**kwargs)
+        except (KeyError, ValueError) as e:
+            logger.warning(f"Template formatting error: {e} for template '{template}' with args {kwargs}")
+            # Create fallback by removing template placeholders
+            fallback = template
+            for key, value in kwargs.items():
+                fallback = fallback.replace(f'{{{key}}}', str(value))
+            return fallback
+
+    def _run(self, query: str, hours_back: int = 24, max_results: int = 10) -> str:
         """
         Search across ALL domains, store results in output folder, then create summary.
         """
         try:
-            # Enforce 1-hour maximum for fresh financial news
-            if hours_back > 1:
-                logger.warning(f"⚠️ Requested {hours_back} hours back, enforcing 1-hour limit for fresh financial news")
-                hours_back = 1
-
+            # Use the requested timeframe for both search and filtering
             tavily_api_key = os.getenv("TAVILY_API_KEY")
             if not tavily_api_key:
                 return "Error: TAVILY_API_KEY not found in environment variables."
@@ -95,7 +103,7 @@ class TavilyFinancialTool(BaseTool):
             end_time = datetime.utcnow()
             start_time = end_time - timedelta(hours=hours_back)
 
-            logger.info(f"⏰ ENFORCING 1-HOUR TIMEFRAME: {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            logger.info(f"⏰ USING TIMEFRAME: {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
             logger.info(f"🌐 SEARCHING ALL DOMAINS for financial news from {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
@@ -145,11 +153,11 @@ class TavilyFinancialTool(BaseTool):
             # Update data with filtered results
             data['results'] = filtered_results
 
-            # Create simple summary under 400 words for direct Telegram sending
-            summary_for_telegram = self._create_telegram_summary(data, query, start_time, domain_coverage, search_results_file)
+            # Create two-message format summary for Telegram sending
+            summary_dict = self._create_telegram_summary(data, query, start_time, domain_coverage, search_results_file)
 
             # Find a relevant image using content analysis and search result domains
-            content_analysis = self._analyze_search_results(filtered_results)
+            content_analysis = summary_dict.get("content_analysis", self._analyze_search_results(filtered_results))
 
             # Extract domains from filtered results for image search
             search_result_domains = list(domain_coverage.keys())
@@ -162,11 +170,12 @@ class TavilyFinancialTool(BaseTool):
             else:
                 search_timeframe = "1m"
 
-            image_data = self._find_relevant_image(summary_for_telegram, content_analysis, search_result_domains, search_timeframe)
+            # Use full summary for image search context
+            search_context = summary_dict.get("full_summary", "")
+            image_data = self._find_relevant_image(search_context, content_analysis, search_result_domains, search_timeframe)
 
-            # Combine summary with image data for Telegram
-            if image_data:
-                summary_for_telegram = self._combine_summary_with_image(summary_for_telegram, image_data)
+            # Combine two-message format with image data for Telegram
+            summary_for_telegram = self._combine_summary_with_image(summary_dict, image_data)
 
             # Save telegram summary with image source to output/summary folder
             summary_file = self._save_telegram_summary(summary_for_telegram, image_data, query, start_time)
@@ -188,19 +197,26 @@ class TavilyFinancialTool(BaseTool):
             return error_msg
 
     def _filter_results_by_time(self, results: list, start_time: datetime, end_time: datetime) -> list:
-        """Filter results to ensure they fall within the 1-hour time window."""
+        """Filter results to ensure they fall within the requested time window."""
         filtered_results = []
         excluded_count = 0
         no_date_count = 0
 
-        logger.info(f"⏰ Filtering {len(results)} results for timeframe: {start_time} to {end_time}")
+        # Calculate time window duration for adaptive filtering
+        time_window_hours = (end_time - start_time).total_seconds() / 3600
+        logger.info(f"⏰ Filtering {len(results)} results for {time_window_hours:.1f} hour timeframe: {start_time} to {end_time}")
 
         for result in results:
             published_date = result.get('published_date')
             if not published_date:
-                # For fresh financial news, we're stricter - exclude articles without dates
-                no_date_count += 1
-                logger.debug(f"📅 Excluding article without date: {result.get('title', 'Unknown')[:50]}...")
+                # For wider time windows (>4 hours), include articles without dates
+                # For narrow windows (<4 hours), require dates for precision
+                if time_window_hours > 4:
+                    filtered_results.append(result)
+                    logger.debug(f"📅 Including article without date (wide window): {result.get('title', 'Unknown')[:50]}...")
+                else:
+                    no_date_count += 1
+                    logger.debug(f"📅 Excluding article without date (narrow window): {result.get('title', 'Unknown')[:50]}...")
                 continue
                 
             try:
@@ -236,7 +252,7 @@ class TavilyFinancialTool(BaseTool):
                 logger.debug(f"❌ Excluded (date parse error): {result.get('title', 'Unknown')[:50]}... (Date: {published_date}, Error: {e})")
 
         logger.info(f"📊 Time filtering results: {len(filtered_results)} included, {excluded_count} excluded, {no_date_count} had no date")
-        logger.info(f"✅ Final filtered results: {len(filtered_results)} articles from past 1 hour")
+        logger.info(f"✅ Final filtered results: {len(filtered_results)} articles from past {time_window_hours:.1f} hours")
         return filtered_results
 
     def _analyze_domain_coverage(self, results: list) -> dict:
@@ -1033,26 +1049,31 @@ class TavilyFinancialTool(BaseTool):
         for pattern, template in economic_implications:
             matches = re.findall(pattern, combined_text_lower, re.IGNORECASE)
             for match in matches[:2]:
-                if isinstance(match, tuple):
-                    if 'rate' in template and 'indication' in template:
-                        formatted_implication = template.format(rate=match[0], indication=match[1].strip())
-                    elif 'rate' in template:
-                        formatted_implication = template.format(rate=match[0])
-                    elif 'trend' in template:
-                        formatted_implication = template.format(trend=match[0].strip())
-                    elif 'factor' in template:
-                        formatted_implication = template.format(factor=match[0].strip())
+                try:
+                    if isinstance(match, tuple):
+                        if 'rate' in template and 'indication' in template:
+                            formatted_implication = template.format(rate=match[0], indication=match[1].strip())
+                        elif 'rate' in template:
+                            formatted_implication = template.format(rate=match[0])
+                        elif 'trend' in template:
+                            formatted_implication = template.format(trend=match[0].strip())
+                        elif 'factor' in template:
+                            formatted_implication = template.format(factor=match[0].strip())
+                        else:
+                            formatted_implication = template
                     else:
-                        formatted_implication = template
-                else:
-                    if 'rate' in template:
-                        formatted_implication = template.format(rate=match)
-                    elif 'trend' in template:
-                        formatted_implication = template.format(trend=match.strip())
-                    elif 'factor' in template:
-                        formatted_implication = template.format(factor=match.strip())
-                    else:
-                        formatted_implication = template
+                        if 'rate' in template:
+                            formatted_implication = template.format(rate=match)
+                        elif 'trend' in template:
+                            formatted_implication = template.format(trend=match.strip())
+                        elif 'factor' in template:
+                            formatted_implication = template.format(factor=match.strip())
+                        else:
+                            formatted_implication = template
+                except (KeyError, IndexError, AttributeError) as e:
+                    logger.warning(f"Template formatting error for pattern '{template}' with match '{match}': {e}")
+                    # Use template without formatting as fallback
+                    formatted_implication = template.replace('{trend}', 'trending').replace('{factor}', 'market factors').replace('{rate}', 'current rate')
                 implications.append(formatted_implication)
 
         # Corporate earnings and financial performance implications
@@ -1212,17 +1233,20 @@ class TavilyFinancialTool(BaseTool):
         scored_points.sort(key=lambda x: x[0], reverse=True)
         return [point for score, point in scored_points]
 
-    def _create_telegram_summary(self, data: dict, query: str, start_time: datetime, domain_coverage: dict, results_file: str) -> str:
-        """Create a comprehensive summary from ALL search results under 400 words for direct Telegram sending."""
+    def _create_telegram_summary(self, data: dict, query: str, start_time: datetime, domain_coverage: dict, results_file: str) -> dict:
+        """Create two-message format: image caption + full summary for Telegram sending."""
         results = data.get("results", [])
         if not results:
-            return "No financial news found for the specified timeframe."
+            return {
+                "has_image_caption": False,
+                "full_summary": "No financial news found for the specified timeframe."
+            }
 
         # Use ALL results for comprehensive analysis
-        logger.info(f"📊 Creating summary from {len(results)} total articles")
+        logger.info(f"📊 Creating two-message format from {len(results)} total articles")
 
         # Analyze ALL search results for comprehensive insights
-        content_analysis = self._analyze_search_results(results)  # Use ALL results, not just first 3
+        content_analysis = self._analyze_search_results(results)
 
         # Get the most relevant article for reference
         top_result = results[0] if results else None
@@ -1237,7 +1261,7 @@ class TavilyFinancialTool(BaseTool):
 
         # Process multiple top articles for diverse insights
         articles_processed = 0
-        for i, result in enumerate(results[:5]):  # Use top 5 articles for key insights
+        for i, result in enumerate(results[:5]):
             article_title = result.get("title", "")
             article_content = result.get("content", "")
 
@@ -1249,29 +1273,14 @@ class TavilyFinancialTool(BaseTool):
                 all_implications.extend(implications)
                 articles_processed += 1
 
-        logger.info(f"📝 Processed {articles_processed} articles for key insights extraction")
-        logger.info(f"🔍 Collected {len(all_key_points)} key points and {len(all_implications)} implications")
+        logger.info(f"📝 Processed {articles_processed} articles for insights extraction")
 
         # Deduplicate and select best key points and implications
-        key_points = self._deduplicate_and_rank_points(all_key_points)[:4]  # Top 4 key points
-        implications = self._deduplicate_and_rank_points(all_implications)[:3]  # Top 3 implications
+        key_points = self._deduplicate_and_rank_points(all_key_points)[:6]  # Up to 6 key points
+        implications = self._deduplicate_and_rank_points(all_implications)[:5]  # Up to 5 implications
 
-        logger.info(f"✅ Final selection: {len(key_points)} key points, {len(implications)} implications")
-
-        # Debug: Log actual content
-        if key_points:
-            logger.info(f"🔍 Key points preview: {key_points[0][:50]}...")
-        else:
-            logger.warning("⚠️ No key points extracted - this will cause placeholder content!")
-
-        if implications:
-            logger.info(f"🔍 Implications preview: {implications[0][:50]}...")
-        else:
-            logger.warning("⚠️ No implications extracted - this will cause placeholder content!")
-
-        # Ensure minimum content to avoid fallbacks
+        # Ensure minimum content
         if not key_points:
-            logger.warning("🚨 No key points found, creating emergency fallback points")
             key_points = [
                 "Financial markets showing significant activity based on recent developments",
                 "Market participants responding to latest economic data and corporate earnings",
@@ -1279,75 +1288,125 @@ class TavilyFinancialTool(BaseTool):
             ]
 
         if not implications:
-            logger.warning("🚨 No implications found, creating emergency fallback implications")
             implications = [
                 "Markets may experience continued volatility as investors digest recent news",
                 "Portfolio positioning strategies likely to adjust based on emerging trends"
             ]
 
-        # Create concise summary parts
+        # Create IMAGE CAPTION (with emojis, ≤150 words, ≤1024 chars)
+        image_caption = self._create_image_caption(catchy_title, key_points, content_analysis)
+
+        # Create FULL SUMMARY (no emojis, ≤400 words, ≤4096 chars)
+        full_summary = self._create_full_summary(catchy_title, key_points, implications, content_analysis)
+
+        logger.info(f"✅ Two-message format created successfully")
+        logger.info(f"📝 Image caption: {len(image_caption.split())} words, {len(image_caption)} chars")
+        logger.info(f"📄 Full summary: {len(full_summary.split())} words, {len(full_summary)} chars")
+
+        return {
+            "has_image_caption": True,
+            "image_caption": image_caption,
+            "full_summary": full_summary,
+            "content_analysis": content_analysis
+        }
+
+    def _create_image_caption(self, catchy_title: str, key_points: list, content_analysis: dict) -> str:
+        """Create image caption with emojis, ≤150 words, ≤1024 chars."""
+        # Start with emoji title
+        caption_parts = [f"📈 {catchy_title}", ""]
+
+        # Add top 3 key highlights with emojis
+        highlights = []
+        for i, point in enumerate(key_points[:3]):
+            # Shorten point for caption
+            short_point = point[:80] + "..." if len(point) > 80 else point
+
+            # Add appropriate emoji based on content
+            if any(word in point.lower() for word in ["fed", "rate", "interest"]):
+                emoji = "🏛️"
+            elif any(word in point.lower() for word in ["earnings", "profit", "revenue"]):
+                emoji = "💰"
+            elif any(word in point.lower() for word in ["stock", "surge", "gain"]):
+                emoji = "📈"
+            elif any(word in point.lower() for word in ["market", "trading"]):
+                emoji = "📊"
+            elif any(word in point.lower() for word in ["tech", "technology"]):
+                emoji = "💻"
+            else:
+                emoji = "📉" if any(word in point.lower() for word in ["fall", "drop", "decline"]) else "💡"
+
+            highlights.append(f"{emoji} {short_point}")
+
+        caption_parts.extend(highlights)
+        caption_parts.extend(["", "Full summary below ⬇️"])
+
+        caption_text = "\n".join(caption_parts)
+
+        # Ensure under limits (≤150 words, ≤1024 chars)
+        while len(caption_text.split()) > 140 or len(caption_text) > 1000:
+            if len(highlights) > 2:
+                highlights = highlights[:2]
+            else:
+                # Shorten highlights further
+                highlights = [h[:60] + "..." if len(h) > 60 else h for h in highlights]
+
+            caption_parts = [f"📈 {catchy_title}", ""]
+            caption_parts.extend(highlights)
+            caption_parts.extend(["", "Full summary below ⬇️"])
+            caption_text = "\n".join(caption_parts)
+
+        logger.info(f"📝 Image caption created: {len(caption_text.split())} words, {len(caption_text)} chars")
+        return caption_text
+
+    def _create_full_summary(self, catchy_title: str, key_points: list, implications: list, content_analysis: dict) -> str:
+        """Create full summary without emojis, ≤400 words, ≤4096 chars."""
         summary_parts = []
 
-        # Catchy title
-        summary_parts.append(f"📈 {catchy_title}")
+        # Title (no emoji in full summary)
+        summary_parts.append(catchy_title)
         summary_parts.append("")
 
-        # Summary metadata showing comprehensive coverage
-        summary_parts.append(f"📊 Market Insights from {len(results)} Articles")
-        summary_parts.append(f"🕐 Latest: {self._format_news_date(top_result.get('published_date', '')) if top_result else 'Recent'}")
-        summary_parts.append("")
-
-        # Key Points (expanded for longer messages)
+        # Key Points section
         if key_points:
             summary_parts.append("Key Points:")
-            # Allow up to 6 points with longer text
-            for point in key_points[:6]:
-                if len(point) > 200:
-                    point = point[:197] + "..."
+            for point in key_points:
                 summary_parts.append(f"- {point}")
             summary_parts.append("")
 
-        # Market Implications (expanded for longer messages)
+        # Market Implications section
         if implications:
             summary_parts.append("Market Implications:")
-            # Allow up to 4 implications with longer text
-            for impl in implications[:4]:
-                if len(impl) > 250:
-                    impl = impl[:247] + "..."
+            for impl in implications:
                 summary_parts.append(f"- {impl}")
+            summary_parts.append("")
 
-        # Join all parts
+        # Live Charts section
+        summary_parts.append("Live Charts:")
+        summary_parts.append('🔗 📊 <a href="https://finance.yahoo.com/quote/%5EGSPC/chart/">S&P 500 Chart</a>')
+        summary_parts.append('🔗 📈 <a href="https://finance.yahoo.com/quote/%5EIXIC/chart/">NASDAQ Chart</a>')
+        summary_parts.append('🔗 📉 <a href="https://finance.yahoo.com/quote/%5EDJI/chart/">Dow Jones Chart</a>')
+        summary_parts.append('🔗 ⚡ <a href="https://finance.yahoo.com/quote/%5EVIX/chart/">VIX Chart</a>')
+        summary_parts.append('🔗 🏛️ <a href="https://finance.yahoo.com/quote/%5ETNX/chart/">10-Year Chart</a>')
+        summary_parts.append('🔗 💰 <a href="https://finance.yahoo.com/quote/GC%3DF/chart/">Gold Chart</a>')
+
         summary_text = "\n".join(summary_parts)
 
-        # Ensure under Telegram limit while leaving space for footer (approx 500 chars)
-        char_count = len(summary_text)
-        word_count = len(summary_text.split())
-
-        # Progressive trimming strategy - leave more space for live charts footer
-        while char_count > 3500 or word_count > 380:  # Leave 600 chars buffer for footer and image data
+        # Ensure under limits (≤400 words, ≤4096 chars)
+        while len(summary_text.split()) > 390 or len(summary_text) > 4000:
             if len(implications) > 3:
                 implications = implications[:3]
-            elif len(key_points) > 5:
-                key_points = key_points[:5]
-            elif len(implications) > 2:
-                implications = implications[:2]
             elif len(key_points) > 4:
                 key_points = key_points[:4]
-            elif len(implications) > 1:
-                implications = implications[:1]
+            elif len(implications) > 2:
+                implications = implications[:2]
             else:
-                # Final trim - shorten individual points to meet both word and character limits
-                key_points = [point[:120] + "..." if len(point) > 120 else point for point in key_points[:3]]
-                implications = [impl[:140] + "..." if len(impl) > 140 else impl for impl in implications[:2]]
+                # Shorten individual points
+                key_points = [point[:150] + "..." if len(point) > 150 else point for point in key_points[:3]]
+                implications = [impl[:180] + "..." if len(impl) > 180 else impl for impl in implications[:2]]
                 break
 
-            # Rebuild summary with trimmed content
-            summary_parts = []
-            summary_parts.append(f"📈 {catchy_title}")
-            summary_parts.append("")
-            summary_parts.append(f"Title: {original_title}")
-            summary_parts.append(f"Date: {published_date}")
-            summary_parts.append("")
+            # Rebuild summary
+            summary_parts = [catchy_title, ""]
 
             if key_points:
                 summary_parts.append("Key Points:")
@@ -1359,56 +1418,17 @@ class TavilyFinancialTool(BaseTool):
                 summary_parts.append("Market Implications:")
                 for impl in implications:
                     summary_parts.append(f"- {impl}")
+                summary_parts.append("")
+
+            if content_analysis.get("key_stocks"):
+                primary_stock = content_analysis["key_stocks"][0]
+                summary_parts.append(f"Live Chart: {primary_stock} Stock Performance")
+            else:
+                summary_parts.append("Live Chart: S&P 500 Market Index")
 
             summary_text = "\n".join(summary_parts)
-            char_count = len(summary_text)
-            word_count = len(summary_text.split())
 
-        final_char_count = len(summary_text)
-        final_word_count = len(summary_text.split())
-        logger.info(f"📊 Final formatted summary: {final_char_count} characters, {final_word_count} words for Telegram")
-
-        # Ensure we stay under 400 words as requested
-        if final_word_count > 400:
-            logger.warning(f"⚠️ Summary exceeds 400 words ({final_word_count}), additional trimming needed")
-
-            # Emergency word trimming if still over 400 words
-            while len(summary_text.split()) > 390:
-                if len(implications) > 1:
-                    implications = implications[:1]
-                elif len(key_points) > 2:
-                    key_points = key_points[:2]
-                else:
-                    # Final emergency trim
-                    key_points = [point[:80] + "..." if len(point) > 80 else point for point in key_points[:2]]
-                    implications = [impl[:100] + "..." if len(impl) > 100 else impl for impl in implications[:1]]
-                    break
-
-                # Rebuild with emergency trimming
-                summary_parts = []
-                summary_parts.append(f"📈 {catchy_title}")
-                summary_parts.append("")
-                summary_parts.append(f"Title: {original_title}")
-                summary_parts.append(f"Date: {published_date}")
-                summary_parts.append("")
-
-                if key_points:
-                    summary_parts.append("Key Points:")
-                    for point in key_points:
-                        summary_parts.append(f"- {point}")
-                    summary_parts.append("")
-
-                if implications:
-                    summary_parts.append("Market Implications:")
-                    for impl in implications:
-                        summary_parts.append(f"- {impl}")
-
-                summary_text = "\n".join(summary_parts)
-
-            final_word_count = len(summary_text.split())
-            final_char_count = len(summary_text)
-            logger.info(f"📊 Emergency trimmed summary: {final_char_count} characters, {final_word_count} words")
-
+        logger.info(f"📄 Full summary created: {len(summary_text.split())} words, {len(summary_text)} chars")
         return summary_text
 
     def _generate_catchy_title(self, original_title: str, content_analysis: dict, query: str) -> str:
@@ -1637,28 +1657,56 @@ class TavilyFinancialTool(BaseTool):
             logger.error(f"Error finding relevant image: {e}")
             return None
 
-    def _combine_summary_with_image(self, summary: str, image_data: dict) -> str:
-        """Combine summary with image data for Telegram sending"""
-        # Add image metadata in the format expected by Telegram sender
+    def _combine_summary_with_image(self, summary_dict: dict, image_data: dict) -> str:
+        """Combine two-message format with image data for Telegram sending"""
+        if not summary_dict.get("has_image_caption"):
+            # No image caption case - return single message
+            return summary_dict.get("full_summary", "No summary available.")
+
+        # Get the two messages
+        image_caption = summary_dict.get("image_caption", "")
+        full_summary = summary_dict.get("full_summary", "")
+
+        # Update Live Chart references if we have actual image data
+        if image_data and image_data.get("url"):
+            chart_description = image_data.get("title", "Financial Chart")
+            full_summary = full_summary.replace("Live Chart: S&P 500 Market Index", f"Live Chart: {chart_description}")
+            full_summary = full_summary.replace("Live Chart: ", "Live Chart: ")
+
+        # Create image metadata
         image_info = {
             "primary_image": {
-                "url": image_data.get("url", ""),
-                "description": image_data.get("title", "Financial Chart"),
-                "type": image_data.get("type", "financial_chart"),
-                "source": image_data.get("source", "Unknown"),
-                "telegram_compatible": image_data.get("telegram_compatible", False),
-                "verification_status": image_data.get("verification_status", "unknown"),
-                "relevance_score": image_data.get("relevance_score", 0),
-                "from_search_results": image_data.get("from_search_results", False),
-                "source_url": image_data.get("source_url", ""),
-                "source_domain": image_data.get("source_domain", "")
+                "url": image_data.get("url", "") if image_data else "",
+                "description": image_data.get("title", "Financial Chart") if image_data else "",
+                "type": image_data.get("type", "financial_chart") if image_data else "",
+                "source": image_data.get("source", "Unknown") if image_data else "",
+                "telegram_compatible": image_data.get("telegram_compatible", False) if image_data else False,
+                "verification_status": image_data.get("verification_status", "unknown") if image_data else "unknown",
+                "relevance_score": image_data.get("relevance_score", 0) if image_data else 0,
+                "from_search_results": image_data.get("from_search_results", False) if image_data else False,
+                "source_url": image_data.get("source_url", "") if image_data else "",
+                "source_domain": image_data.get("source_domain", "") if image_data else ""
             }
         }
 
-        # Add image info as JSON at the end for the Telegram sender to parse
-        combined_content = summary + "\n\n---TELEGRAM_IMAGE_DATA---\n" + json.dumps(image_info)
+        # Format for Telegram bot parsing
+        telegram_format = {
+            "message_type": "two_message_format",
+            "has_image": bool(image_data and image_data.get("url")),
+            "message_1_image_caption": image_caption,
+            "message_2_full_summary": full_summary,
+            "image_metadata": image_info
+        }
 
-        logger.info(f"📝 Combined summary with image data: {image_data.get('title', 'Unknown')}")
+        # Return in the format expected by Telegram sender
+        combined_content = "=== TELEGRAM_TWO_MESSAGE_FORMAT ===\n"
+        combined_content += f"Message 1 (Image Caption):\n{image_caption}\n\n"
+        combined_content += f"Message 2 (Full Summary):\n{full_summary}\n\n"
+        combined_content += "---TELEGRAM_IMAGE_DATA---\n"
+        combined_content += json.dumps(image_info, indent=2)
+
+        logger.info(f"📝 Two-message format combined with image data")
+        logger.info(f"📊 Has image: {bool(image_data and image_data.get('url'))}")
 
         return combined_content
 
