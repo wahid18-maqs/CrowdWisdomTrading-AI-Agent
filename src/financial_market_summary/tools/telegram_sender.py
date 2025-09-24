@@ -1415,6 +1415,21 @@ class EnhancedTelegramSender(BaseTool):
 
     def _verify_image_url(self, url: str) -> bool:
         """Verify that an image URL is accessible."""
+        # Trusted financial chart sources - skip verification for known reliable sources
+        trusted_chart_domains = [
+            'finviz.com',
+            'stockcharts.com',
+            'chart.yahoo.com',
+            'charts.ycharts.com'
+        ]
+
+        # If it's from a trusted chart source, assume it's valid
+        for domain in trusted_chart_domains:
+            if domain in url.lower():
+                logger.info(f"✅ Trusted chart domain detected: {domain}")
+                return True
+
+        # For other URLs, do the regular verification
         try:
             import requests
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}

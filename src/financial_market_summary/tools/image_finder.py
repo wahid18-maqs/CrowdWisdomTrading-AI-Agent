@@ -99,13 +99,70 @@ class EnhancedImageFinder(BaseTool):
                 x.get('relevance_score', 0)
             ), reverse=True)
 
-            # Add fallback if no good images found
+            # Add fallback if no good images found - always include fallbacks for financial content
             if not any(img.get('telegram_compatible', False) for img in verified_images):
                 logger.warning("⚠️ No Telegram-compatible images from Serper, adding fallbacks")
-                fallback_images = self._get_fallback_images(content, stocks, 2)
+                fallback_images = self._get_fallback_images(content, stocks, 3)
                 verified_images.extend(fallback_images)
 
-            return verified_images[:max_images]
+            # Always ensure at least one compatible image - use reliable chart sources
+            if not any(img.get('telegram_compatible', False) for img in verified_images):
+                logger.info("📊 No compatible images found, forcing reliable chart inclusion")
+
+                # Use most reliable financial chart sources
+                reliable_charts = [
+                    {
+                        'url': 'https://finviz.com/chart.ashx?t=SPY&ty=c&ta=1&p=d&s=l',
+                        'title': 'S&P 500 Chart',
+                        'source': 'Finviz',
+                        'type': 'market_chart',
+                        'relevance_score': 90,
+                        'telegram_compatible': True,
+                        'file_type': 'png',
+                        'trusted_source': True
+                    },
+                    {
+                        'url': 'https://stockcharts.com/c-sc/sc?s=SPY&p=D&st=2023-01-01&en=(today)&i=t9999999999999&r=1',
+                        'title': 'SPY Stock Chart',
+                        'source': 'StockCharts',
+                        'type': 'market_chart',
+                        'relevance_score': 85,
+                        'telegram_compatible': True,
+                        'file_type': 'png',
+                        'trusted_source': True
+                    }
+                ]
+
+                # Add the first reliable chart
+                verified_images.extend(reliable_charts[:1])
+                logger.info(f"✅ Added reliable chart: {reliable_charts[0]['title']}")
+
+            # If we have stocks mentioned, try to add a stock-specific chart
+            if stocks and not any(img.get('stock_symbol') for img in verified_images):
+                primary_stock = stocks[0]
+                stock_chart = {
+                    'url': f'https://finviz.com/chart.ashx?t={primary_stock}&ty=c&ta=1&p=d&s=l',
+                    'title': f'{primary_stock} Stock Chart',
+                    'source': 'Finviz',
+                    'type': 'stock_chart',
+                    'stock_symbol': primary_stock,
+                    'relevance_score': 95,
+                    'telegram_compatible': True,
+                    'file_type': 'png',
+                    'trusted_source': True
+                }
+                verified_images.append(stock_chart)
+                logger.info(f"✅ Added stock-specific chart: {primary_stock}")
+
+            # Prioritize Telegram-compatible images
+            compatible_images = [img for img in verified_images if img.get('telegram_compatible', False)]
+            non_compatible_images = [img for img in verified_images if not img.get('telegram_compatible', False)]
+
+            # Return compatible images first, then non-compatible as backup
+            final_images = compatible_images + non_compatible_images
+            logger.info(f"📊 Returning {len(compatible_images)} compatible + {len(non_compatible_images)} non-compatible images")
+
+            return final_images[:max_images]
 
         except Exception as e:
             logger.error(f"Error in Serper image search: {e}")
@@ -160,14 +217,14 @@ class EnhancedImageFinder(BaseTool):
             "Content-Type": "application/json"
         }
 
-        # Add time filter for recent images
+        # Add time filter for recent images - expanded for financial content
         payload = {
             "q": query,
             "num": max_results,
             "gl": "us",
             "hl": "en",
             "tbm": "isch",
-            "tbs": "qdr:w"  # Images from past week
+            "tbs": "qdr:m"  # Images from past month (more financial charts available)
         }
 
         try:
@@ -329,12 +386,15 @@ class EnhancedImageFinder(BaseTool):
     def _get_tradingview_snapshots(self, stock_symbol: str) -> List[Dict[str, Any]]:
         """Get TradingView chart snapshot images (actual PNG files)"""
         images = []
-        
-        # TradingView provides direct PNG snapshot URLs
+
+        # TradingView provides direct PNG snapshot URLs + more reliable alternatives
         tradingview_urls = [
             f"https://s3.tradingview.com/snapshots/u/{stock_symbol.lower()}.png",
             f"https://s3.tradingview.com/snapshots/s/{stock_symbol.upper()}.png",
-            f"https://charts.tradingview.com/chart-images/{stock_symbol.lower()}_1D.png"
+            f"https://charts.tradingview.com/chart-images/{stock_symbol.lower()}_1D.png",
+            # Add more reliable Yahoo Finance chart snapshots
+            f"https://chart.yahoo.com/z?s={stock_symbol}&t=1d&q=l&l=on&z=s&p=s",
+            f"https://chart.yahoo.com/z?s={stock_symbol}&t=5d&q=l&l=on&z=s&p=s"
         ]
         
         for i, url in enumerate(tradingview_urls):

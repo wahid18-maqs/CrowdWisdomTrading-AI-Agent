@@ -21,7 +21,7 @@ class TavilySearchInput(BaseModel):
 
     query: str = Field(..., description="The search query for financial news.")
     hours_back: int = Field(
-        default=24, description="Number of hours back to search for news."
+        default=1, description="Number of hours back to search for news."
     )
     max_results: int = Field(
         default=10, description="The maximum number of search results to return."
@@ -88,7 +88,7 @@ class TavilyFinancialTool(BaseTool):
                 fallback = fallback.replace(f'{{{key}}}', str(value))
             return fallback
 
-    def _run(self, query: str, hours_back: int = 24, max_results: int = 10) -> str:
+    def _run(self, query: str, hours_back: int = 1, max_results: int = 10) -> str:
         """
         Search across ALL domains, store results in output folder, then create summary.
         """
@@ -1626,12 +1626,11 @@ class TavilyFinancialTool(BaseTool):
             logger.info(f"⏰ Image search timeframe: {search_timeframe}")
 
             # Search for images with enhanced filtering
+            # Note: EnhancedImageFinder only accepts search_content, mentioned_stocks, and max_images
             result = image_finder._run(
                 search_content=summary_content,
                 mentioned_stocks=mentioned_stocks,
-                max_images=1,  # We only need one image
-                search_result_domains=search_result_domains,
-                search_timeframe=search_timeframe
+                max_images=1  # We only need one image
             )
 
             # Parse the result
@@ -1640,17 +1639,18 @@ class TavilyFinancialTool(BaseTool):
 
             if images and len(images) > 0:
                 best_image = images[0]
+                logger.info(f"📊 Image finder returned: {best_image.get('title', 'Unknown')}")
+                logger.info(f"🔗 URL: {best_image.get('url', 'No URL')}")
+                logger.info(f"📱 Telegram Compatible: {best_image.get('telegram_compatible', False)}")
+
                 if best_image.get("telegram_compatible", False):
-                    logger.info(f"✅ Found Telegram-compatible image: {best_image.get('title', 'Unknown')}")
-                    if best_image.get("from_search_results", False):
-                        logger.info(f"🎯 Image is from search result domain: {best_image.get('source_domain', 'Unknown')}")
+                    logger.info(f"✅ Returning Telegram-compatible image: {best_image.get('title', 'Unknown')}")
                     return best_image
                 else:
-                    logger.warning(f"⚠️ Found image but not Telegram-compatible: {best_image.get('verification_status', 'Unknown')}")
-                    # Still return it, the Telegram sender can handle it
+                    logger.warning(f"⚠️ Image not compatible but returning anyway: {best_image.get('verification_status', 'Unknown')}")
                     return best_image
 
-            logger.warning("No suitable images found")
+            logger.warning("⚠️ No images returned from image finder")
             return None
 
         except Exception as e:
@@ -1673,7 +1673,14 @@ class TavilyFinancialTool(BaseTool):
             full_summary = full_summary.replace("Live Chart: S&P 500 Market Index", f"Live Chart: {chart_description}")
             full_summary = full_summary.replace("Live Chart: ", "Live Chart: ")
 
-        # Create image metadata
+        # Create image metadata with detailed logging
+        logger.info(f"🖼️ Creating image metadata from image_data: {image_data}")
+
+        if image_data:
+            logger.info(f"✅ Image data available: URL={image_data.get('url', 'NO_URL')}, Compatible={image_data.get('telegram_compatible', 'NO_COMPAT')}")
+        else:
+            logger.warning("❌ No image_data received from image finder")
+
         image_info = {
             "primary_image": {
                 "url": image_data.get("url", "") if image_data else "",
@@ -1688,6 +1695,8 @@ class TavilyFinancialTool(BaseTool):
                 "source_domain": image_data.get("source_domain", "") if image_data else ""
             }
         }
+
+        logger.info(f"📊 Final primary_image structure: URL='{image_info['primary_image']['url']}', Compatible={image_info['primary_image']['telegram_compatible']}")
 
         # Format for Telegram bot parsing
         telegram_format = {
