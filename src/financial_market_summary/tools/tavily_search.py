@@ -224,15 +224,20 @@ class TavilyFinancialTool(BaseTool):
             title = result.get('title', 'Unknown')[:50]
 
             if not published_date:
-                # For 1-hour searches, be EXTREMELY strict - no dates means exclude
                 if time_window_hours <= 1:
-                    # Only include if the title/URL suggests it's breaking/live news
-                    if self._is_likely_breaking_news(result):
+                    domain = urlparse(result.get("url", "")).netloc.lower()
+                    if domain.startswith("www."):
+                        domain = domain[4:]
+
+                    # Use full trusted domains list
+                    trusted_domains = set(self._get_comprehensive_trusted_domains())
+
+                    if self._is_likely_breaking_news(result) or domain in trusted_domains:
                         filtered_results.append(result)
-                        logger.info(f"✅ BREAKING NEWS (no date): {title}...")
+                        logger.info(f"✅ INCLUDED (no date, trusted/breaking): {title}... ({domain})")
                     else:
                         no_date_count += 1
-                        logger.info(f"❌ EXCLUDED (no date, not breaking): {title}...")
+                        logger.info(f"❌ EXCLUDED (no date, untrusted): {title}... ({domain})")
                     continue
                 # For wider time windows (>4 hours), include articles without dates
                 elif time_window_hours > 4:
