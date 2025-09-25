@@ -92,14 +92,26 @@ class TavilyFinancialTool(BaseTool):
         """
         Search across ALL domains, store results in output folder, then create summary.
         """
+        # ENFORCE 1-hour searches for main workflow queries
+        if any(term in query.lower() for term in ['breaking', 'live', 'today', 'stock market', 'financial news']):
+            if hours_back > 1:
+                logger.warning(f"🚨 FORCING 1-hour search for main workflow query (was {hours_back}h): {query}")
+                hours_back = 1
+
         try:
             # Use the requested timeframe for both search and filtering
             tavily_api_key = os.getenv("TAVILY_API_KEY")
             if not tavily_api_key:
                 return "Error: TAVILY_API_KEY not found in environment variables."
 
-            # Enhanced query construction
+            # Enhanced query construction with 1-hour precision
             financial_query = self._build_enhanced_query(query)
+
+            # For 1-hour searches, add breaking news terms
+            if hours_back <= 1:
+                financial_query = f"{financial_query} breaking news today latest live updates now"
+                logger.info(f"🚨 1-HOUR PRECISION QUERY: {financial_query}")
+
             end_time = datetime.utcnow()
             start_time = end_time - timedelta(hours=hours_back)
 
@@ -132,26 +144,27 @@ class TavilyFinancialTool(BaseTool):
 
             data = response.json()
 
-            # Store search results in output folder BEFORE filtering to debug
-            search_results_file = self._store_search_results(data, query, start_time, end_time)
-
-            # Filter results by time
+            # Filter results by time FIRST
+            original_count = len(data.get('results', []))
             filtered_results = self._filter_results_by_time(data.get('results', []), start_time, end_time)
 
             if not filtered_results:
                 logger.warning("No results found across all domains within timeframe")
-                logger.info(f"📊 Original results count: {len(data.get('results', []))}")
-                logger.info(f"📁 Raw search results stored in: {search_results_file}")
+                logger.info(f"📊 Original results count: {original_count}")
                 return "No financial news found across all domains within the search timeframe."
+
+            # Update data with filtered results BEFORE storing
+            data['results'] = filtered_results
+
+            # Store search results with ONLY filtered (1-hour) articles
+            search_results_file = self._store_search_results(data, query, start_time, end_time)
+            logger.info(f"📁 Stored {len(filtered_results)} 1-hour articles (filtered from {original_count}) in: {search_results_file}")
 
             # Analyze domain coverage
             domain_coverage = self._analyze_domain_coverage(filtered_results)
             logger.info(f"📊 Domain coverage analysis: {len(domain_coverage)} unique domains found")
             for domain, count in sorted(domain_coverage.items(), key=lambda x: x[1], reverse=True)[:10]:
                 logger.info(f"  - {domain}: {count} articles")
-
-            # Update data with filtered results
-            data['results'] = filtered_results
 
             # Create two-message format summary for Telegram sending
             summary_dict = self._create_telegram_summary(data, query, start_time, domain_coverage, search_results_file)
@@ -208,44 +221,68 @@ class TavilyFinancialTool(BaseTool):
 
         for result in results:
             published_date = result.get('published_date')
+            title = result.get('title', 'Unknown')[:50]
+
             if not published_date:
+                # For 1-hour searches, be EXTREMELY strict - no dates means exclude
+                if time_window_hours <= 1:
+                    # Only include if the title/URL suggests it's breaking/live news
+                    if self._is_likely_breaking_news(result):
+                        filtered_results.append(result)
+                        logger.info(f"✅ BREAKING NEWS (no date): {title}...")
+                    else:
+                        no_date_count += 1
+                        logger.info(f"❌ EXCLUDED (no date, not breaking): {title}...")
+                    continue
                 # For wider time windows (>4 hours), include articles without dates
-                # For narrow windows (<4 hours), require dates for precision
-                if time_window_hours > 4:
+                elif time_window_hours > 4:
                     filtered_results.append(result)
-                    logger.debug(f"📅 Including article without date (wide window): {result.get('title', 'Unknown')[:50]}...")
+                    logger.debug(f"📅 Including article without date (wide window): {title}...")
                 else:
                     no_date_count += 1
-                    logger.debug(f"📅 Excluding article without date (narrow window): {result.get('title', 'Unknown')[:50]}...")
+                    logger.debug(f"📅 Excluding article without date (narrow window): {title}...")
                 continue
                 
             try:
                 # Parse published date
-                if 'T' in published_date:
-                    pub_datetime = datetime.fromisoformat(published_date.replace('Z', '+00:00'))
-                    if pub_datetime.tzinfo is not None:
-                        pub_datetime = pub_datetime.astimezone().utctimetuple()
-                        pub_datetime = datetime(*pub_datetime[:6])
-                else:
-                    # Try other formats
-                    for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%m/%d/%Y']:
-                        try:
-                            pub_datetime = datetime.strptime(published_date, fmt)
-                            break
-                        except ValueError:
-                            continue
+                logger.info(f"🔍 DEBUG: Parsing date '{published_date}' for article: {result.get('title', 'Unknown')[:50]}...")
+
+                # Enhanced date parsing with multiple formats and validation
+                pub_datetime = self._parse_published_date(published_date, time_window_hours <= 1)
+                if pub_datetime is None:
+                    # If can't parse and it's a 1-hour search, only include if it looks like breaking news
+                    if time_window_hours <= 1:
+                        if self._is_likely_breaking_news(result):
+                            logger.info(f"🚨 Unparseable date but breaking news: {title}...")
+                            filtered_results.append(result)
+                        else:
+                            logger.info(f"❌ Cannot parse date '{published_date}', not breaking news")
                     else:
-                        # If can't parse, include the result
-                        filtered_results.append(result)
-                        continue
+                        logger.debug(f"❌ Cannot parse date '{published_date}', excluding")
+                    continue
+
+                logger.info(f"📅 Parsed datetime: {pub_datetime}")
                 
                 # Check if within time window
-                if start_time <= pub_datetime <= end_time:
+                hours_ago = (end_time - pub_datetime).total_seconds() / 3600
+                logger.info(f"⏰ Time check: article={pub_datetime}, hours_ago={hours_ago:.2f}h, window={time_window_hours}h")
+
+                # STRICT 1-hour filtering
+                if time_window_hours <= 1:
+                    # For 1-hour searches, only include articles from past 90 minutes (with small buffer)
+                    if hours_ago <= 1.5:
+                        filtered_results.append(result)
+                        logger.info(f"✅ PRECISE 1H: {title}... ({hours_ago:.1f}h ago)")
+                    else:
+                        excluded_count += 1
+                        logger.info(f"❌ TOO OLD for 1h search: {title}... ({hours_ago:.1f}h ago)")
+                # Standard time window filtering for longer searches
+                elif start_time <= pub_datetime <= end_time:
                     filtered_results.append(result)
-                    logger.debug(f"✅ Included: {result.get('title', 'Unknown')[:50]}... (Published: {published_date})")
+                    logger.debug(f"✅ Included (in timeframe): {title}...")
                 else:
                     excluded_count += 1
-                    logger.debug(f"❌ Excluded (outside timeframe): {result.get('title', 'Unknown')[:50]}... (Published: {published_date})")
+                    logger.debug(f"❌ Excluded (outside timeframe): {title}... ({hours_ago:.1f}h ago)")
 
             except Exception as e:
                 excluded_count += 1
@@ -254,6 +291,152 @@ class TavilyFinancialTool(BaseTool):
         logger.info(f"📊 Time filtering results: {len(filtered_results)} included, {excluded_count} excluded, {no_date_count} had no date")
         logger.info(f"✅ Final filtered results: {len(filtered_results)} articles from past {time_window_hours:.1f} hours")
         return filtered_results
+
+    def _is_likely_breaking_news(self, result: dict) -> bool:
+        """Detect if an article without a date is likely breaking/live news."""
+        title = result.get('title', '').lower()
+        url = result.get('url', '').lower()
+
+        # Live/breaking indicators in title
+        breaking_indicators = [
+            'live updates', 'breaking', 'just in', 'developing',
+            'stock market today', 'live', 'real-time', 'now',
+            'today:', 'alert:', 'urgent:', 'flash:'
+        ]
+
+        # Live news URL patterns
+        live_url_patterns = [
+            'live-updates', 'stock-market-today', 'breaking',
+            'real-time', 'today', '/live/', '/now/'
+        ]
+
+        # Check title
+        if any(indicator in title for indicator in breaking_indicators):
+            return True
+
+        # Check URL
+        if any(pattern in url for pattern in live_url_patterns):
+            return True
+
+        # Check for today's date in URL (YYYY/MM/DD or YYYY-MM-DD)
+        from datetime import datetime
+        today = datetime.now()
+        date_patterns = [
+            today.strftime('%Y/%m/%d'),
+            today.strftime('%Y-%m-%d'),
+            today.strftime('%Y%m%d')
+        ]
+
+        if any(pattern in url for pattern in date_patterns):
+            return True
+
+        return False
+
+    def _clean_and_format_real_title(self, title: str) -> str:
+        """Clean and format actual article titles for better readability."""
+        if not title or title.strip() == "":
+            return "Breaking Financial Market Update"
+
+        # Remove common unwanted suffixes/prefixes
+        cleaned_title = title.strip()
+
+        # Remove source names from end (e.g., "Title - CNN", "Title | Reuters")
+        patterns_to_remove = [
+            r'\s*[-|]\s*(CNN|Reuters|Bloomberg|Yahoo Finance|MarketWatch|CNBC|Benzinga|Investing\.com).*$',
+            r'\s*\|\s*.*$',  # Remove everything after |
+            r'\s*-\s*[A-Z][a-z]*\s*$',  # Remove trailing source names
+        ]
+
+        for pattern in patterns_to_remove:
+            cleaned_title = re.sub(pattern, '', cleaned_title, flags=re.IGNORECASE)
+
+        # Capitalize first letter
+        cleaned_title = cleaned_title.strip()
+        if cleaned_title:
+            cleaned_title = cleaned_title[0].upper() + cleaned_title[1:] if len(cleaned_title) > 1 else cleaned_title.upper()
+
+        # Add emoji if title doesn't already have one
+        if not any(ord(char) > 127 for char in cleaned_title):  # No existing emojis
+            # Add appropriate emoji based on content
+            if any(word in cleaned_title.lower() for word in ['break', 'alert', 'urgent']):
+                cleaned_title = f"🚨 {cleaned_title}"
+            elif any(word in cleaned_title.lower() for word in ['up', 'gain', 'surge', 'rally']):
+                cleaned_title = f"📈 {cleaned_title}"
+            elif any(word in cleaned_title.lower() for word in ['down', 'fall', 'drop', 'decline']):
+                cleaned_title = f"📉 {cleaned_title}"
+            elif any(word in cleaned_title.lower() for word in ['fed', 'rate', 'policy']):
+                cleaned_title = f"🏛️ {cleaned_title}"
+            elif any(word in cleaned_title.lower() for word in ['earnings', 'report', 'results']):
+                cleaned_title = f"💼 {cleaned_title}"
+            else:
+                cleaned_title = f"📰 {cleaned_title}"
+
+        # Truncate if too long (keep under 100 characters for readability)
+        if len(cleaned_title) > 100:
+            cleaned_title = cleaned_title[:97] + "..."
+
+        return cleaned_title
+
+    def _parse_published_date(self, published_date: str, is_one_hour_search: bool) -> Optional[datetime]:
+        """Enhanced date parsing with multiple formats and strict validation for 1-hour searches."""
+        if not published_date or published_date.lower() in ['none', 'null', 'undefined', '']:
+            return None
+
+        # Common date formats to try
+        formats = [
+            '%Y-%m-%dT%H:%M:%SZ',           # ISO format with Z
+            '%Y-%m-%dT%H:%M:%S.%fZ',        # ISO with microseconds
+            '%Y-%m-%dT%H:%M:%S%z',          # ISO with timezone
+            '%Y-%m-%d %H:%M:%S',            # Standard datetime
+            '%Y/%m/%d %H:%M:%S',            # Alternative separators
+            '%Y-%m-%d',                     # Date only
+            '%Y/%m/%d',                     # Date only alternative
+            '%m/%d/%Y',                     # US format
+            '%d/%m/%Y',                     # European format
+            '%m-%d-%Y',                     # US format with dashes
+            '%d-%m-%Y',                     # European format with dashes
+        ]
+
+        # First try ISO format handling
+        if 'T' in published_date:
+            try:
+                # Clean up common timezone indicators
+                clean_date = published_date.replace('Z', '+00:00')
+                if '+' not in clean_date and clean_date.endswith('Z'):
+                    clean_date = clean_date[:-1] + '+00:00'
+
+                pub_datetime = datetime.fromisoformat(clean_date)
+                if pub_datetime.tzinfo is not None:
+                    # Convert to UTC
+                    pub_datetime = pub_datetime.astimezone().replace(tzinfo=None)
+
+                logger.info(f"📅 ISO parsed: {pub_datetime}")
+                return pub_datetime
+            except Exception as e:
+                logger.debug(f"ISO parsing failed: {e}")
+
+        # Try other formats
+        for fmt in formats:
+            try:
+                pub_datetime = datetime.strptime(published_date.strip(), fmt)
+                logger.info(f"📅 Parsed with {fmt}: {pub_datetime}")
+
+                # For 1-hour searches, validate that the date is reasonable (not too far in future/past)
+                if is_one_hour_search:
+                    now = datetime.utcnow()
+                    hours_diff = abs((now - pub_datetime).total_seconds() / 3600)
+
+                    # Reject dates more than 24 hours old or in the future
+                    if hours_diff > 24:
+                        logger.warning(f"Date seems invalid for 1h search: {hours_diff:.1f}h difference")
+                        continue
+
+                return pub_datetime
+            except ValueError:
+                continue
+
+        logger.warning(f"Could not parse date: {published_date}")
+        return None
 
     def _analyze_domain_coverage(self, results: list) -> dict:
         """Analyze domain coverage to ensure comprehensive search."""
@@ -619,11 +802,18 @@ class TavilyFinancialTool(BaseTool):
                 articles.append(article)
 
             # Create simple search results JSON
+            # Calculate search window info
+            time_window_hours = (end_time - start_time).total_seconds() / 3600
+
             search_results_data = {
                 "metadata": {
                     "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'),
                     "query": query,
-                    "total_articles": len(articles)
+                    "total_articles": len(articles),
+                    "search_window_hours": time_window_hours,
+                    "search_timeframe": f"{start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+                    "filtered_results": True,
+                    "precision_note": f"Contains ONLY articles from past {time_window_hours:.1f} hour(s)" if time_window_hours <= 1 else f"Filtered for {time_window_hours:.1f} hour timeframe"
                 },
                 "articles": articles
             }
@@ -1250,10 +1440,16 @@ class TavilyFinancialTool(BaseTool):
 
         # Get the most relevant article for reference
         top_result = results[0] if results else None
-        original_title = self._clean_content(top_result.get("title", "Financial Market Update")) if top_result else "Market Update"
 
-        # Generate catchy title based on ALL content analysis
-        catchy_title = self._generate_catchy_title(original_title, content_analysis, query)
+        # Use ACTUAL title from search results, not generated one
+        if top_result:
+            actual_title = self._clean_content(top_result.get("title", ""))
+            # Clean up title for better readability
+            catchy_title = self._clean_and_format_real_title(actual_title)
+            logger.info(f"📰 Using ACTUAL title from search: '{actual_title}' → '{catchy_title}'")
+        else:
+            catchy_title = "Breaking Financial Market Update"
+            logger.info("📰 No search results, using fallback title")
 
         # Extract comprehensive key points and implications from ALL articles
         all_key_points = []
@@ -1443,24 +1639,61 @@ class TavilyFinancialTool(BaseTool):
 
         # Fed/Policy focused titles
         if any(theme in ["fed_policy"] for theme in key_themes) or any(word in title_lower for word in ["fed", "federal reserve", "rate"]):
+            import random
             if "meeting" in title_lower:
-                return "🏛️ Fed's Pivotal Policy Meeting Shakes Markets"
+                meeting_titles = [
+                    "🏛️ Fed's Pivotal Policy Meeting Shakes Markets",
+                    "📊 Federal Reserve Meeting Sparks Market Volatility",
+                    "🎯 Critical Fed Decision Day: Markets on Edge"
+                ]
+                return random.choice(meeting_titles)
             elif "cut" in title_lower or "lower" in title_lower:
-                return "📉 Fed Rate Cut Signals: Market Rally Ahead?"
+                cut_titles = [
+                    "📉 Fed Rate Cut Signals: Market Rally Ahead?",
+                    "🚀 Rate Cut Hopes Drive Market Optimism",
+                    "💰 Fed Dovish Stance Ignites Investor Confidence"
+                ]
+                return random.choice(cut_titles)
             elif "inflation" in title_lower:
-                return "📊 Inflation Data Sparks Fed Policy Speculation"
+                inflation_titles = [
+                    "📊 Inflation Data Sparks Fed Policy Speculation",
+                    "🔥 Price Pressures Shape Fed's Next Move",
+                    "📈 Inflation Metrics Drive Market Expectations"
+                ]
+                return random.choice(inflation_titles)
             else:
-                return "🎯 Federal Reserve Decision Rocks Financial Markets"
+                fed_titles = [
+                    "🎯 Federal Reserve Decision Rocks Financial Markets",
+                    "🏛️ Fed Policy Shift Sends Shockwaves Through Trading",
+                    "⚡ Central Bank Action Transforms Market Sentiment"
+                ]
+                return random.choice(fed_titles)
 
         # Earnings focused titles
         elif "earnings" in key_themes or "earnings" in title_lower:
+            import random
             if key_movers and any("+" in str(mover.get("performance", "")) for mover in key_movers):
                 top_stock = key_movers[0].get("symbol", key_stocks[0] if key_stocks else "Market")
-                return f"🚀 {top_stock} Earnings Beat Ignites Market Surge"
+                beat_templates = [
+                    f"🚀 {top_stock} Earnings Beat Ignites Market Surge",
+                    f"📈 {top_stock} Smashes Expectations: Rally Continues",
+                    f"💰 {top_stock} Strong Earnings Fuel Investor Optimism"
+                ]
+                return random.choice(beat_templates)
             elif key_stocks:
-                return f"💼 {key_stocks[0]} Earnings Report Moves Markets"
+                stock_templates = [
+                    f"💼 {key_stocks[0]} Earnings Report Moves Markets",
+                    f"📊 {key_stocks[0]} Results Drive Trading Action",
+                    f"🎯 {key_stocks[0]} Earnings Shape Market Sentiment"
+                ]
+                return random.choice(stock_templates)
             else:
-                return "📈 Corporate Earnings Drive Market Momentum"
+                general_earnings = [
+                    "📈 Corporate Earnings Drive Market Momentum",
+                    "💼 Q4 Results Season Reshapes Investment Landscape",
+                    "🚀 Earnings Surprises Fuel Market Optimism"
+                ]
+                return random.choice(general_earnings)
 
         # Technology focused titles
         elif "technology" in key_themes or any(word in title_lower for word in ["tech", "ai", "innovation"]):
@@ -1507,19 +1740,23 @@ class TavilyFinancialTool(BaseTool):
 
         # Default catchy titles
         else:
+            import random
             catchy_options = [
                 "🔥 Breaking: Financial Markets React to Latest Developments",
                 "⚡ Market Alert: Key Developments Shape Trading Sentiment",
                 "📈 Investor Focus: Critical Market Moves Unfold",
                 "🎯 Market Watch: Significant Financial Developments",
-                "💼 Wall Street Update: Major Market Movements"
+                "💼 Wall Street Update: Major Market Movements",
+                "🚀 Market Momentum: Key Financial Shifts Drive Action",
+                "💡 Trading Spotlight: Major Market Catalysts Emerge",
+                "🌟 Financial Flash: Critical Developments Shake Markets",
+                "📊 Market Pulse: Significant Events Reshape Trading",
+                "⭐ Wall Street Wire: Major Financial Movements Unfold"
             ]
 
-            # Choose based on content themes
-            if key_themes:
-                return catchy_options[len(key_themes) % len(catchy_options)]
-            else:
-                return catchy_options[0]
+            # Add randomization based on current time and content
+            seed = hash(str(content_analysis) + str(original_title) + str(query)) % len(catchy_options)
+            return catchy_options[seed]
 
     def _extract_article_key_points_formatted(self, title: str, content: str, content_analysis: dict) -> list:
         """Extract and format key points specifically for the structured format."""

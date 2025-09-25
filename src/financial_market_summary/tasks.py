@@ -14,13 +14,22 @@ class FinancialTasks:
         
         # Task 1: Search Free Financial News (1-hour enforced)
         search_task = Task(
-            description="""Search for US financial news from the last 1 hour only using FREE sources.
-            
-            Target sources: Yahoo Finance, MarketWatch, Investing.com, Benzinga, CNBC
-            Focus on: Major stock movements, earnings reports, economic data
-            
-            CRITICAL: Use tavily_financial_search with hours_back=1 and include_domains limited to free sources.""",
-            expected_output="Recent financial news from free sources with accessible article URLs and verified content.",
+            description="""Search for BREAKING/LIVE US financial news from the past 1 HOUR ONLY using 
+            sources.
+
+            STRICT REQUIREMENTS:
+            1. ONLY articles published in the last 60-90 minutes
+            2. Focus on BREAKING NEWS, LIVE UPDATES, or TODAY's market activity
+            3. Target sources: Yahoo Finance, MarketWatch, Investing.com, Benzinga, CNBC
+            4. Look for: Live market updates, breaking earnings, Fed announcements, major stock moves
+
+            SEARCH STRATEGY:
+            - Use terms like "breaking news today", "live updates", "stock market today"
+            - Prioritize articles with "live", "today", "now", "breaking" in titles
+            - Only include articles that are genuinely recent (within 1 hour)
+
+            CRITICAL: Use tavily_financial_search with hours_back=1 - be extremely selective about recency.""",
+            expected_output="Only the most recent breaking financial news from the past hour with verified timestamps and accessible URLs.",
             agent=self.agents.search_agent()
         )
         
