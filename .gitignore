@@ -247,3 +247,5 @@ videos/
 test_workflow.py
 
 output/
+
+test_search_results.py

@@ -10,6 +10,9 @@ import json
 import re
 from urllib.parse import urlparse
 from pathlib import Path
+from bs4 import BeautifulSoup
+import time
+from urllib.robotparser import RobotFileParser
 
 # Load environment variables
 load_dotenv()
@@ -17,7 +20,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class TavilySearchInput(BaseModel):
-    """Input schema for the financial search tool."""
+    """Input schema dor the financial search tool."""
 
     query: str = Field(..., description="The search query for financial news.")
     hours_back: int = Field(
@@ -122,13 +125,15 @@ class TavilyFinancialTool(BaseTool):
             # Search all domains - no restrictions
             logger.info("🔍 Searching across ALL domains without restrictions for comprehensive coverage")
 
-            url = "https://api.tavily.com/search"
+            url = "https://api.tavily.com/search" 
             payload = {
                 "api_key": tavily_api_key,
                 "query": financial_query,
                 "search_depth": "advanced",
                 "include_answer": True,
                 "include_raw_content": True,  # Get full content for storage
+                "include_images": True,  # Include images from search results
+                "include_image_descriptions": True,  # Include image descriptions
                 "max_results": max(max_results, 20),  # Increase for comprehensive coverage
 
                 # NO DOMAIN RESTRICTIONS - search everything
@@ -144,6 +149,56 @@ class TavilyFinancialTool(BaseTool):
 
             data = response.json()
 
+            # Debug: Log the response structure to understand image data
+            logger.info(f"🔍 DEBUG: Tavily API response keys: {list(data.keys())}")
+
+            # Extract and filter images from root level
+            root_images = data.get('images', [])
+            logger.info(f"🔍 DEBUG: Found {len(root_images)} images at root level")
+
+            # Filter images for stock charts and graphs only
+            filtered_chart_images = []
+            for i, img in enumerate(root_images):
+                img_url = img.get('url', '')
+                img_desc = img.get('description', '') or ''
+                logger.info(f"🔍 DEBUG: Image {i+1}: url='{img_url[:50]}...', desc='{img_desc[:50]}...'")
+
+                if img_desc and self._is_stock_chart_or_graph(img_desc):
+                    filtered_chart_images.append(img)
+                    logger.info(f"✅ Image {i+1}: INCLUDED as chart/graph")
+                else:
+                    logger.info(f"❌ Image {i+1}: EXCLUDED (not a chart/graph)")
+
+            logger.info(f"📊 Filtered to {len(filtered_chart_images)} chart/graph images")
+
+            # Enhanced article processing with full content extraction
+            logger.info("🔍 Enhanced chart extraction from articles...")
+            for article in data.get("results", []):
+                article_url = article.get("url", "")
+
+                # Extract charts from raw content first
+                raw_content = article.get("raw_content", "")
+                initial_charts = self._extract_article_charts(raw_content) if raw_content else []
+
+                # If no charts found, try fetching full article content
+                if not initial_charts and article_url:
+                    logger.info(f"No charts in raw content, fetching full HTML from: {article_url}")
+                    full_html = self._extract_full_article_content(article_url)
+                    enhanced_charts = self._extract_article_charts_enhanced(full_html, article_url)
+                    article["chart_images"] = enhanced_charts
+                else:
+                    article["chart_images"] = initial_charts
+
+                if article["chart_images"]:
+                    logger.info(f"Found {len(article['chart_images'])} charts in: {article.get('title', 'Unknown')[:50]}")
+
+            results = data.get('results', [])
+            if results:
+                first_result = results[0]
+                logger.info(f"🔍 DEBUG: First result keys: {list(first_result.keys())}")
+            else:
+                logger.warning("🔍 DEBUG: No results returned from Tavily API")
+
             # Filter results by time FIRST
             original_count = len(data.get('results', []))
             filtered_results = self._filter_results_by_time(data.get('results', []), start_time, end_time)
@@ -156,8 +211,8 @@ class TavilyFinancialTool(BaseTool):
             # Update data with filtered results BEFORE storing
             data['results'] = filtered_results
 
-            # Store search results with ONLY filtered (1-hour) articles
-            search_results_file = self._store_search_results(data, query, start_time, end_time)
+            # Store search results with ONLY filtered (1-hour) articles and chart images
+            search_results_file = self._store_search_results(data, query, start_time, end_time, filtered_chart_images)
             logger.info(f"📁 Stored {len(filtered_results)} 1-hour articles (filtered from {original_count}) in: {search_results_file}")
 
             # Analyze domain coverage
@@ -461,20 +516,179 @@ class TavilyFinancialTool(BaseTool):
         return domain_coverage
 
     def _build_enhanced_query(self, original_query: str) -> str:
-        """Build enhanced search query for better financial results."""
-        base_query = f"{original_query} US stock market financial news"
-        
+        """Build enhanced search query for market news or stock chart images."""
         query_lower = original_query.lower()
-        
+
+        # If the query is for US stock market summary -> prefer charts
+        if "stock market" in query_lower and "news" in query_lower:
+            return f"{original_query} chart graph live updates"
+
+        # If explicitly chart-related
+        if any(term in query_lower for term in ["chart", "graph", "technical analysis"]):
+            return f"{original_query} stock market chart live"
+
+        # Default fallback for financial news
+        base_query = f"{original_query} US stock market financial news"
         if any(term in query_lower for term in ["earnings", "results", "revenue"]):
             base_query += " earnings report quarterly"
         elif any(term in query_lower for term in ["fed", "interest", "rate"]):
             base_query += " federal reserve interest rates"
         elif any(term in query_lower for term in ["tech", "technology"]):
             base_query += " technology stocks"
-        
+
         return base_query
 
+    def _can_fetch_url(self, url: str) -> bool:
+        """Check if we can fetch the URL (basic robots.txt compliance)."""
+        try:
+            parsed_url = urlparse(url)
+            robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
+
+            rp = RobotFileParser()
+            rp.set_url(robots_url)
+            rp.read()
+
+            return rp.can_fetch('*', url)
+        except:
+            return True  # Default to allowing if robots.txt check fails
+
+    def _extract_full_article_content(self, url: str) -> str:
+        """Fetch full article HTML content with rate limiting and respect for robots.txt."""
+        try:
+            if not self._can_fetch_url(url):
+                logger.info(f"Robots.txt disallows fetching: {url}")
+                return ""
+
+            # Rate limiting - wait between requests
+            time.sleep(0.5)
+
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            logger.warning(f"Failed to fetch full content from {url}: {e}")
+            return ""
+
+    def _extract_article_charts(self, article_html: str) -> list:
+        """Extract potential chart images from article HTML content."""
+        charts = []
+        try:
+            if not article_html:
+                return charts
+
+            soup = BeautifulSoup(article_html, "html.parser")
+
+            for img in soup.find_all("img"):
+                src = img.get("src") or img.get("data-src")
+                alt = (img.get("alt") or "").lower()
+
+                if not src:
+                    continue
+
+                # Keep only chart-like images
+                if any(k in alt or k in src for k in ["chart", "graph", "market-data", "price"]):
+                    charts.append(src)
+
+        except Exception as e:
+            logger.error(f"Error extracting charts from HTML: {e}")
+
+        return charts
+
+    def _extract_article_charts_enhanced(self, article_html: str, article_url: str) -> list:
+        """Enhanced extraction of chart images from article HTML content."""
+        charts = []
+        try:
+            if not article_html:
+                return charts
+
+            soup = BeautifulSoup(article_html, "html.parser")
+            base_domain = urlparse(article_url).netloc
+
+            # Look for images in various containers
+            image_selectors = [
+                'img[src*="chart"]',
+                'img[src*="graph"]',
+                'img[alt*="chart"]',
+                'img[alt*="graph"]',
+                'img[alt*="stock"]',
+                'img[alt*="market"]',
+                '.chart img',
+                '.graph img',
+                '.market-data img',
+                '[class*="chart"] img',
+                '[class*="graph"] img'
+            ]
+
+            found_images = set()  # Avoid duplicates
+
+            for selector in image_selectors:
+                for img in soup.select(selector):
+                    src = img.get("src") or img.get("data-src") or img.get("data-lazy-src")
+                    alt = (img.get("alt") or "").lower()
+
+                    if not src:
+                        continue
+
+                    # Convert relative URLs to absolute
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/'):
+                        src = f"https://{base_domain}{src}"
+                    elif not src.startswith(('http://', 'https://')):
+                        src = f"https://{base_domain}/{src}"
+
+                    # Enhanced filtering for financial charts
+                    chart_indicators = [
+                        'chart', 'graph', 'plot', 'ticker', 'candlestick',
+                        'market', 'stock', 'price', 'trading', 'technical',
+                        'trend', 'volume', 'performance', 'index'
+                    ]
+
+                    # Check both src and alt for chart indicators
+                    is_chart = any(indicator in src.lower() or indicator in alt
+                                 for indicator in chart_indicators)
+
+                    # Exclude obvious non-charts
+                    exclude_patterns = [
+                        'logo', 'avatar', 'profile', 'banner', 'ad',
+                        'social', 'icon', 'button', 'thumbnail'
+                    ]
+
+                    is_excluded = any(pattern in src.lower() or pattern in alt
+                                    for pattern in exclude_patterns)
+
+                    if is_chart and not is_excluded and src not in found_images:
+                        charts.append({
+                            'url': src,
+                            'alt': alt,
+                            'source_article': article_url,
+                            'extraction_method': 'html_parsing'
+                        })
+                        found_images.add(src)
+
+            # Also look for embedded trading widgets or iframe charts
+            for iframe in soup.find_all('iframe'):
+                iframe_src = iframe.get('src', '')
+                if any(domain in iframe_src.lower() for domain in [
+                    'tradingview', 'yahoo.com/quote', 'marketwatch',
+                    'bloomberg', 'cnbc', 'investing.com'
+                ]):
+                    charts.append({
+                        'url': iframe_src,
+                        'alt': 'Embedded trading chart',
+                        'source_article': article_url,
+                        'extraction_method': 'iframe_widget'
+                    })
+
+            logger.info(f"Extracted {len(charts)} chart images from {article_url}")
+            return charts[:5]  # Limit to top 5 charts
+
+        except Exception as e:
+            logger.error(f"Error extracting charts from {article_url}: {e}")
+            return []
 
     def _clean_content(self, content: str) -> str:
         """Clean content of formatting artifacts"""
@@ -765,13 +979,15 @@ class TavilyFinancialTool(BaseTool):
 
         return points[:5]  # Return exactly 3-5 points
 
-    def _store_search_results(self, data: dict, query: str, start_time: datetime, end_time: datetime) -> str:
+    def _store_search_results(self, data: dict, query: str, start_time: datetime, end_time: datetime, chart_images: list = None) -> str:
         """Store simple search results in output/search_results folder as JSON."""
         try:
             # Create output directory structure
             project_root = Path(__file__).resolve().parent.parent.parent.parent
             search_results_dir = project_root / "output" / "search_results"
+            logger.info(f"🔍 DEBUG: Creating output directory at: {search_results_dir}")
             search_results_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"🔍 DEBUG: Output directory created successfully")
 
             # Generate filename with timestamp and query
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -780,6 +996,7 @@ class TavilyFinancialTool(BaseTool):
 
             filename = f"search_results_{timestamp}_{safe_query}.json"
             filepath = search_results_dir / filename
+            logger.info(f"🔍 DEBUG: Will save file to: {filepath}")
 
             # Process articles from search results
             articles = []
@@ -794,6 +1011,35 @@ class TavilyFinancialTool(BaseTool):
                 key_points = self._extract_article_key_points(title, content)
                 market_implications = self._extract_article_market_implications(title, content)
 
+                # Prioritize article charts over generic images
+                filtered_image_url = ""
+                filtered_image_description = ""
+
+                # PRIORITY 1: Charts from article content
+                article_charts = result.get("chart_images", [])
+                if article_charts:
+                    best_chart = article_charts[0]  # Take the first/best chart
+                    if isinstance(best_chart, dict):
+                        filtered_image_url = best_chart.get("url", "")
+                        filtered_image_description = f"Chart from {self._extract_clean_domain(url)}: {best_chart.get('alt', 'Financial chart')}"
+                    else:
+                        filtered_image_url = best_chart
+                        filtered_image_description = f"Chart from {self._extract_clean_domain(url)}"
+                    logger.info(f"✅ Article {i}: Using article-specific chart")
+
+                # PRIORITY 2: Tavily root-level images (only if no article charts)
+                elif i <= len(chart_images or []):
+                    chart_img = chart_images[i-1]
+                    filtered_image_url = chart_img.get("url", "")
+                    filtered_image_description = chart_img.get("description", "")
+                    logger.info(f"✅ Article {i}: Using Tavily chart image as fallback")
+
+                # PRIORITY 3: No images
+                else:
+                    filtered_image_url = ""
+                    filtered_image_description = ""
+                    logger.info(f"❌ Article {i}: No chart images available")
+
                 article = {
                     "article_number": i,
                     "title": title,
@@ -802,7 +1048,9 @@ class TavilyFinancialTool(BaseTool):
                     "date": date,
                     "content_snippet": content[:300] + "..." if len(content) > 300 else content,
                     "key_points": key_points,
-                    "market_implications": market_implications
+                    "market_implications": market_implications,
+                    "image_url": filtered_image_url,
+                    "image_description": filtered_image_description
                 }
                 articles.append(article)
 
@@ -824,10 +1072,18 @@ class TavilyFinancialTool(BaseTool):
             }
 
             # Write JSON file
+            logger.info(f"🔍 DEBUG: Writing JSON file with {len(articles)} articles...")
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(search_results_data, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"✅ Search results JSON created: {filename} ({len(articles)} articles)")
+            # Verify file was created
+            if filepath.exists():
+                file_size = filepath.stat().st_size
+                logger.info(f"✅ Search results JSON created: {filename} ({len(articles)} articles, {file_size} bytes)")
+                logger.info(f"🔍 DEBUG: File successfully saved at: {filepath}")
+            else:
+                logger.error(f"❌ File was not created at: {filepath}")
+
             return str(filepath)
 
         except Exception as e:
@@ -944,6 +1200,27 @@ class TavilyFinancialTool(BaseTool):
         formatted_output.append(f"📅 Generated: {summary_timestamp}")
 
         return "\n".join(formatted_output)
+
+    def _is_stock_chart_or_graph(self, image_description: str) -> bool:
+        """Check if image description indicates a stock chart or graph."""
+        if not image_description:
+            return False
+
+        description_lower = image_description.lower()
+
+        # Keywords that indicate stock charts or financial graphs
+        chart_keywords = [
+            'chart', 'graph', 'plot', 'line chart', 'bar chart',
+            'stock price', 'price chart', 'trading chart', 'market chart',
+            'financial chart', 'stock graph', 'price graph', 'trading graph',
+            'technical analysis', 'trend line', 'support level', 'resistance level',
+            'volume chart', 'price movement', 'stock performance', 'market trend',
+            'stock ticker', 'price action', 'trading volume', 'market data',
+            'financial data visualization', 'stock market chart', 'equity chart'
+        ]
+
+        # Check if any chart keywords are present
+        return any(keyword in description_lower for keyword in chart_keywords)
 
     def _extract_article_key_points(self, title: str, content: str) -> list:
         """Extract comprehensive key points from individual article content."""
