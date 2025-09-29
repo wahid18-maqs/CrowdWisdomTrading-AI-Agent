@@ -185,7 +185,7 @@ class TavilyFinancialTool(BaseTool):
 
             # Use full summary for image search context
             search_context = summary_dict.get("full_summary", "")
-            image_data = self._find_relevant_image(search_context, content_analysis, search_result_domains, search_timeframe)
+            image_data = self._find_relevant_image(search_context, content_analysis, search_result_domains, search_timeframe, search_results_file)
 
             # Combine two-message format with image data for Telegram
             summary_for_telegram = self._combine_summary_with_image(summary_dict, image_data)
@@ -1849,8 +1849,8 @@ class TavilyFinancialTool(BaseTool):
         return implications[:3]  # Limit to 3 implications
 
     def _find_relevant_image(self, summary_content: str, content_analysis: dict,
-                            search_result_domains: List[str] = None, search_timeframe: str = "24h") -> dict:
-        """Find a relevant image using Serper API for the summary content with domain and date filtering"""
+                            search_result_domains: List[str] = None, search_timeframe: str = "24h", search_results_file: str = "") -> dict:
+        """Find a relevant image for the summary content with domain and date filtering"""
         try:
             # Import the image finder
             from .image_finder import EnhancedImageFinder
@@ -1867,12 +1867,12 @@ class TavilyFinancialTool(BaseTool):
             logger.info(f"📍 Using {len(search_result_domains)} search result domains for image filtering")
             logger.info(f"⏰ Image search timeframe: {search_timeframe}")
 
-            # Search for images with enhanced filtering
-            # Note: EnhancedImageFinder only accepts search_content, mentioned_stocks, and max_images
+            # Search for images with enhanced filtering using search results file
             result = image_finder._run(
                 search_content=summary_content,
                 mentioned_stocks=mentioned_stocks,
-                max_images=1  # We only need one image
+                max_images=1,  # We only need one image
+                search_results_file=search_results_file
             )
 
             # Parse the result

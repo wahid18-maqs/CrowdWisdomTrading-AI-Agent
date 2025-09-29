@@ -10,6 +10,14 @@ from .agents import FinancialAgents
 from .LLM_config import apply_rate_limiting
 from urllib.parse import urlparse
 
+# Visualization imports (install with: pip install matplotlib networkx)
+try:
+    import matplotlib.pyplot as plt
+    import networkx as nx
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 class FinancialMarketCrew:
@@ -21,6 +29,7 @@ class FinancialMarketCrew:
     def __init__(self):
         self.agents_factory = FinancialAgents()
         self.execution_results: Dict[str, Any] = {}
+        self.flow = self._create_flow_graph()
 
     def _validate_summary(self, summary: str, original_news: str) -> Dict[str, Any]:
         """
@@ -480,43 +489,30 @@ class FinancialMarketCrew:
         return [stock for stock in stocks if stock in major_stocks]
 
     def _run_enhanced_image_search_phase(self, summary_title: str, key_themes: List[str], mentioned_stocks: List[str], content: str) -> Dict[str, Any]:
-        """Search for and verify relevant financial images"""
-        logger.info(f"--- Phase 2.2: Enhanced Image Search for '{summary_title[:50]}...' ---")
-        
-        try:
-            # Use the enhanced image agent
-            image_search_result = self.agents_factory.enhanced_image_agent.run_image_search_phase(
-                summary_title, key_themes, mentioned_stocks, content
-            )
-            
-            # Log results
-            verified_count = image_search_result.get('verified_count', 0)
-            total_count = image_search_result.get('total_images_found', 0)
-            confidence = image_search_result.get('confidence_score', 0)
-            
-            logger.info(f"Image search completed: {verified_count}/{total_count} verified (Confidence: {confidence}/100)")
-            
-            return image_search_result
-            
-        except Exception as e:
-            logger.warning(f"Enhanced image search failed: {e}")
-            return self._image_search_fallback(summary_title, mentioned_stocks)
+        """Images are now extracted during search phase - this method is deprecated"""
+        logger.info(f"--- Phase 2.2: Image search is now handled during Tavily search phase ---")
+
+        # Images are extracted during the search phase via Tavily search tool
+        # Return empty result as images are handled in search phase
+        logger.info("Images are automatically extracted during search phase - no separate image search needed")
+
+        return {
+            "verified_images": [],
+            "search_strategy_used": "Images extracted during search phase",
+            "total_images_found": 0,
+            "verified_count": 0,
+            "confidence_score": 0,
+            "verification_rate": 0,
+            "fallback_used": False
+        }
 
     def _select_best_verified_image(self, image_search_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Select the best verified image from search results"""
-        try:
-            best_image = self.agents_factory.enhanced_image_agent.select_best_image(image_search_data)
-            
-            if best_image:
-                logger.info(f"Selected verified image: {best_image.get('title', 'Unknown')[:50]}... (Verified: {best_image.get('url_verified', False)})")
-                return best_image
-            else:
-                logger.warning("No suitable images found, using fallback")
-                return self._get_fallback_image()
-                
-        except Exception as e:
-            logger.warning(f"Image selection failed: {e}")
-            return self._get_fallback_image()
+        """Images are now handled during search phase - this method is deprecated"""
+        logger.info("Images are automatically selected during search phase - no separate image selection needed")
+
+        # Images are handled automatically during the search phase
+        # Return None as images are processed during search
+        return None
 
     def _image_search_fallback(self, title: str, stocks: List[str]) -> Dict[str, Any]:
         """Simple fallback when image search fails"""
@@ -625,6 +621,74 @@ class FinancialMarketCrew:
             logger.error(error_msg, exc_info=True)
             return {"status": "failed", "error": error_msg}
 
+    def _create_flow_graph(self):
+        """Create workflow graph for visualization"""
+        if not VISUALIZATION_AVAILABLE:
+            return None
+
+        G = nx.DiGraph()
+
+        # Define the workflow steps
+        workflow_steps = [
+            ("Start", "Tavily Search"),
+            ("Tavily Search", "Image Extraction"),
+            ("Image Extraction", "Vision AI Analysis"),
+            ("Vision AI Analysis", "Image Filtering"),
+            ("Image Filtering", "Summary Creation"),
+            ("Summary Creation", "Content Formatting"),
+            ("Content Formatting", "Telegram Delivery"),
+            ("Telegram Delivery", "End")
+        ]
+
+        G.add_edges_from(workflow_steps)
+        return G
+
+    def plot(self):
+        """Plot the financial market workflow"""
+        if not VISUALIZATION_AVAILABLE:
+            print("❌ Visualization not available. Install dependencies with:")
+            print("pip install matplotlib networkx")
+            return
+
+        if self.flow is None:
+            print("❌ Flow graph not created")
+            return
+
+        plt.figure(figsize=(14, 10))
+
+        # Create hierarchical layout
+        pos = {}
+        levels = {
+            "Start": (0, 4),
+            "Tavily Search": (2, 4),
+            "Image Extraction": (4, 4),
+            "Vision AI Analysis": (6, 4),
+            "Image Filtering": (8, 4),
+            "Summary Creation": (10, 4),
+            "Content Formatting": (12, 4),
+            "Telegram Delivery": (14, 4),
+            "End": (16, 4)
+        }
+        pos.update(levels)
+
+        # Draw the graph
+        nx.draw(self.flow, pos,
+                with_labels=True,
+                node_color='lightblue',
+                node_size=3000,
+                font_size=8,
+                font_weight='bold',
+                arrows=True,
+                arrowsize=20,
+                edge_color='gray',
+                linewidths=2)
+
+        plt.title("Financial Market Summary Workflow", fontsize=16, fontweight='bold')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.show()
+        print("✅ Workflow visualization displayed!")
+
     def _run_search_phase(self) -> str:
         """Search phase that creates two-message format summary."""
         logger.info("--- Phase 1: Searching for Financial News (Last 24 Hours) ---")
@@ -641,16 +705,16 @@ class FinancialMarketCrew:
 
             SEARCH STRATEGY:
             1. Use tavily_financial_search tool with NO domain restrictions
-            2. Search terms: "US stock market financial news earnings Fed policy"
+            2. Search terms: "US stock market financial news"
             3. Search timeframe: Last 24 hours (not just 1 hour to ensure results)
             4. Gather comprehensive news from all available sources
             5. Store complete results in output folder
             6. Generate two-message format output
 
             TWO-MESSAGE FORMAT REQUIREMENTS:
-            1. Message 1 (Image Caption): Short, engaging caption with emojis (≤150 words, ≤1024 chars)
-               - Include catchy title with emoji
-               - 3 key highlights with appropriate emojis
+            1. Message 1 (Image Caption): Short, engaging caption with image description (≤150 words, ≤1024 chars)
+               - Include clear description of the financial image/chart being shown
+               - Explain what the image represents and its relevance to the news
                - End with "Full summary below ⬇️"
 
             2. Message 2 (Full Summary): Comprehensive analysis (≤400 words, ≤4096 chars)
