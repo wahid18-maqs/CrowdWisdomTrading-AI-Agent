@@ -800,7 +800,6 @@ class TavilyFinancialTool(BaseTool):
                     "source": source_name,
                     "url": url,
                     "date": date,
-                    "content_snippet": content[:300] + "..." if len(content) > 300 else content,
                     "key_points": key_points,
                     "market_implications": market_implications
                 }

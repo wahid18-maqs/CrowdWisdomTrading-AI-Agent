@@ -198,6 +198,8 @@ class EnhancedImageFinder(BaseTool):
             return 'gif'
         elif '.webp' in url_lower:
             return 'webp'
+        elif '.svg' in url_lower:
+            return 'svg'
         else:
             return 'unknown'
 
@@ -352,7 +354,7 @@ class EnhancedImageFinder(BaseTool):
 
     def _is_direct_image_url(self, url: str) -> bool:
         """Check if URL points to a direct image file"""
-        image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+        image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']
         url_lower = url.lower()
 
         # Check for direct image extensions
@@ -365,6 +367,7 @@ class EnhancedImageFinder(BaseTool):
             r'\.jpe?g(\?|$)',
             r'\.gif(\?|$)',
             r'\.webp(\?|$)',
+            r'\.svg(\?|$)',
             r'/images?/',
             r'/charts?/',
             r'chart.*\.(png|jpg)',
@@ -386,7 +389,7 @@ class EnhancedImageFinder(BaseTool):
         try:
             headers = {
                 'User-Agent': 'TelegramBot (like TwitterBot)',
-                'Accept': 'image/*,*/*;q=0.8'
+                'Accept': 'image/*,image/svg+xml,*/*;q=0.8'
             }
 
             start_time = time.time()
@@ -403,7 +406,7 @@ class EnhancedImageFinder(BaseTool):
                 verification_data['file_size'] = content_length
 
                 # Check if it's actually an image
-                if any(img_type in content_type for img_type in ['image/', 'png', 'jpeg', 'jpg', 'gif']):
+                if any(img_type in content_type for img_type in ['image/', 'png', 'jpeg', 'jpg', 'gif', 'svg']):
                     # Check file size (Telegram limit is 10MB for photos)
                     if content_length and int(content_length) < 10 * 1024 * 1024:  # 10MB
                         verification_data['telegram_compatible'] = True
