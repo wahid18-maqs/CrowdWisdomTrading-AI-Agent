@@ -12,11 +12,14 @@ import time
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from PIL import Image
+import io
 
 # Load environment variables
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class EnhancedImageFinderInput(BaseModel):
@@ -35,6 +38,10 @@ class EnhancedImageFinder(BaseTool):
 
     def _run(self, search_content: str, mentioned_stocks: List[str] = None, max_images: int = 1, search_results_file: str = "") -> str:
         try:
+            logger.info("="*60)
+            logger.info("🖼️ IMAGE FINDER STARTED")
+            logger.info("="*60)
+
             if mentioned_stocks is None:
                 mentioned_stocks = []
 
@@ -42,55 +49,50 @@ class EnhancedImageFinder(BaseTool):
             if not mentioned_stocks:
                 mentioned_stocks = self._extract_stock_symbols(search_content)
 
+            logger.info(f"📊 Mentioned stocks: {mentioned_stocks}")
+            logger.info(f"🎯 Max images to find: {max_images}")
+            logger.info(f"📁 Search results file: {search_results_file}")
+
             # Always extract URLs from search results file
             if not search_results_file:
                 logger.error("❌ No search results file provided")
                 return json.dumps([], indent=2)
 
             article_urls = self._extract_urls_from_search_results(search_results_file)
+            logger.info(f"📄 Extracted {len(article_urls)} URLs from search results")
 
-            # Extract images from article URLs
-            if article_urls:
-                logger.info(f"🔍 Extracting images from {len(article_urls)} article URLs from search results")
-                extracted_images = self._extract_from_provided_urls(article_urls, search_content, mentioned_stocks, max_images)
-            else:
-                logger.warning("⚠️ No article URLs found in search results file")
-                extracted_images = []
+            if not article_urls:
+                logger.warning("⚠️ No article URLs found in search results")
+                return json.dumps([], indent=2)
 
-            # Verify Telegram compatibility
-            extracted_images = self._verify_telegram_compatibility(extracted_images)
+            # Extract screenshots from article URLs
+            logger.info(f"📸 Starting screenshot extraction from {len(article_urls)} URLs...")
+            extracted_images = self._extract_screenshots_from_urls(article_urls, search_content, max_images)
+            logger.info(f"📊 Screenshot extraction complete: {len(extracted_images)} images captured")
 
-            # Analyze images for financial relevance using vision AI
-            extracted_images = self._analyze_images_for_relevance(extracted_images, search_content)
+            if not extracted_images:
+                logger.warning("⚠️ No screenshots were captured from any URLs")
+                return json.dumps([], indent=2)
 
-            # Remove images with unknown sources
-            extracted_images = [img for img in extracted_images if img.get('source', 'unknown') != 'unknown']
+            # Generate AI descriptions for screenshots
+            logger.info(f"🤖 Generating AI descriptions for {len(extracted_images)} images...")
+            extracted_images = self._generate_ai_descriptions(extracted_images, search_content)
+            logger.info(f"✅ AI descriptions generated")
 
-            # Filter out low-relevance images (score < 70)
-            extracted_images = [img for img in extracted_images if img.get('vision_relevance_score', 0) >= 70]
+            # Save and return
+            logger.info(f"💾 Saving {len(extracted_images)} image results...")
+            self._save_image_results(extracted_images, search_content)
 
-            # Sort by vision relevance, telegram compatibility, and original relevance
-            extracted_images.sort(key=lambda x: (
-                x.get('telegram_compatible', False),
-                x.get('vision_relevance_score', 0),
-                x.get('relevance_score', 0)
-            ), reverse=True)
+            extracted_images.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
 
-            # Limit to requested number
-            final_images = extracted_images[:max_images]
+            logger.info("="*60)
+            logger.info(f"✅ IMAGE FINDER COMPLETED: {len(extracted_images)} images")
+            logger.info("="*60)
 
-            logger.info(f"📊 Returning {len(final_images)} images from article extraction")
-
-            # Save image results to output directory
-            if extracted_images:
-                self._save_image_results(extracted_images, search_content)
-
-            # Return as JSON
-            return json.dumps(final_images, indent=2)
+            return json.dumps(extracted_images[:max_images], indent=2)
 
         except Exception as e:
-            logger.error(f"Image finder failed: {e}")
-            # Return empty result if extraction fails
+            logger.error(f"❌ Image finder failed with exception: {e}", exc_info=True)
             return json.dumps([], indent=2)
 
     def _extract_stock_symbols(self, content: str) -> List[str]:
@@ -126,313 +128,428 @@ class EnhancedImageFinder(BaseTool):
             logger.error(f"Failed to extract URLs from search results file: {e}")
             return []
 
-    def _extract_from_provided_urls(self, article_urls: List[str], content: str, stocks: List[str], max_images: int) -> List[Dict[str, Any]]:
-        """Extract images from provided article URLs"""
+    def _extract_screenshots_from_urls(self, article_urls: List[str], content: str, max_images: int) -> List[Dict[str, Any]]:
+        """Extract screenshots from provided article URLs"""
         extracted_images = []
 
-        for url in article_urls:  # Process all URLs from search results
+        # Limit attempts to avoid long timeouts
+        max_attempts = min(5, len(article_urls))
+        attempts = 0
+        skipped_yahoo = 0
+
+        logger.info(f"🔍 Starting screenshot extraction:")
+        logger.info(f"   - Total URLs available: {len(article_urls)}")
+        logger.info(f"   - Max attempts: {max_attempts}")
+        logger.info(f"   - Target images: {max_images}")
+
+        for idx, url in enumerate(article_urls, 1):
+            if attempts >= max_attempts:
+                logger.info(f"⚠️ Reached max attempts ({max_attempts}), stopping screenshot extraction")
+                break
+
+            # Allow Yahoo Finance for chart extraction
+            # Yahoo Finance has good charts that we can capture
+
+            attempts += 1
+
             try:
-                logger.info(f"🔍 Extracting images from: {url[:50]}...")
-                article_images = self._extract_images_from_article(url)
+                logger.info(f"📸 [{idx}/{len(article_urls)}] Attempt {attempts}/{max_attempts}")
+                logger.info(f"   URL: {url}")
+                screenshot_data = self._capture_chart_screenshot(url)
 
-                # Process and score the extracted images
-                for img in article_images[:3]:  # Take top 3 from each article
-                    source = urlparse(url).netloc
-
-                    # Skip images with unknown sources
-                    if source == 'unknown' or not source:
-                        continue
-
-                    processed_img = {
-                        'url': img['url'],
-                        'title': img.get('alt', 'Financial Chart from Article'),
-                        'source': source,
-                        'type': 'extracted_from_article',
-                        'relevance_score': 100,
-                        'telegram_compatible': False,  # Will be verified later
-                        'file_type': self._get_file_extension(img['url']),
-                        'trusted_source': self._is_trusted_financial_source(source),
-                        'extraction_method': img['type'],
-                        'source_article': url
-                    }
-                    extracted_images.append(processed_img)
-
-                    # Stop if we have enough images
-                    if len(extracted_images) >= max_images:
-                        break
+                if screenshot_data:
+                    extracted_images.append(screenshot_data)
+                    logger.info(f"✅ Screenshot captured successfully!")
+                    logger.info(f"   Saved to: {screenshot_data.get('url', 'unknown')}")
+                else:
+                    logger.warning(f"⚠️ Screenshot capture returned None for {url[:80]}...")
 
                 if len(extracted_images) >= max_images:
+                    logger.info(f"✅ Target images ({max_images}) reached, stopping")
                     break
 
             except Exception as e:
-                logger.warning(f"Failed to extract images from {url}: {e}")
+                logger.error(f"❌ Exception during screenshot from {url[:80]}...: {e}", exc_info=True)
                 continue
 
-        logger.info(f"📸 Extracted {len(extracted_images)} images from provided URLs")
+        logger.info(f"📊 Screenshot extraction summary:")
+        logger.info(f"   - URLs processed: {idx}")
+        logger.info(f"   - Yahoo Finance skipped: {skipped_yahoo}")
+        logger.info(f"   - Screenshot attempts: {attempts}")
+        logger.info(f"   - Images captured: {len(extracted_images)}")
+
         return extracted_images
 
-    def _determine_image_type(self, title: str, content: str) -> str:
-        """Determine the type of financial image"""
-        title_lower = title.lower()
-        content_lower = content.lower()
-
-        if any(term in title_lower for term in ['chart', 'graph', 'price']):
-            return 'stock_chart'
-        elif any(term in content_lower for term in ['fed', 'federal reserve', 'interest rate']):
-            return 'economic_data'
-        elif 'earnings' in content_lower:
-            return 'earnings_chart'
-        elif any(term in content_lower for term in ['nasdaq', 's&p', 'dow']):
-            return 'market_index'
-        else:
-            return 'financial_chart'
-
-    def _get_file_extension(self, url: str) -> str:
-        """Get file extension from URL"""
-        url_lower = url.lower()
-        if '.png' in url_lower:
-            return 'png'
-        elif '.jpg' in url_lower or '.jpeg' in url_lower:
-            return 'jpg'
-        elif '.gif' in url_lower:
-            return 'gif'
-        elif '.webp' in url_lower:
-            return 'webp'
-        elif '.svg' in url_lower:
-            return 'svg'
-        else:
-            return 'unknown'
-
-    def _is_trusted_financial_source(self, source: str) -> bool:
-        """Check if source is a trusted financial website"""
-        trusted_sources = [
-            'yahoo.com', 'finance.yahoo.com', 'marketwatch.com', 'bloomberg.com',
-            'cnbc.com', 'reuters.com', 'wsj.com', 'ft.com', 'investing.com',
-            'tradingview.com', 'benzinga.com', 'seekingalpha.com', 'morningstar.com',
-            'fool.com', 'finviz.com', 'nasdaq.com', 'nyse.com'
-        ]
-
-        source_lower = source.lower()
-        return any(trusted in source_lower for trusted in trusted_sources)
-
-
-    def _extract_images_from_article(self, article_url: str) -> List[Dict[str, Any]]:
-        """Extract all image URLs from an article page"""
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-
+    def _capture_chart_screenshot(self, article_url: str) -> Optional[Dict[str, Any]]:
+        """Capture a single chart screenshot from article page"""
         try:
-            response = requests.get(article_url, headers=headers, timeout=10)
-            response.raise_for_status()
+            with sync_playwright() as p:
+                # Launch browser
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-gpu',
+                        '--disable-extensions'
+                    ]
+                )
 
-            soup = BeautifulSoup(response.content, 'html.parser')
-            image_urls = []
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                )
 
-            # Method 1: Find all img tags
-            images = soup.find_all('img')
-            for img in images:
-                img_url = (img.get('src') or
-                          img.get('data-src') or
-                          img.get('data-lazy-src') or
-                          img.get('data-original') or
-                          img.get('data-srcset'))
+                page = context.new_page()
+                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-                if img_url:
-                    # Handle srcset (multiple URLs)
-                    if 'srcset' in str(img_url):
-                        img_url = img_url.split(',')[0].split()[0]
+                # Load page with more aggressive timeout and fallback strategies
+                logger.info(f"📖 Loading page: {article_url}")
+                try:
+                    # Try with domcontentloaded first (faster)
+                    page.goto(article_url, wait_until='domcontentloaded', timeout=20000)
+                    logger.info("✅ Page loaded (domcontentloaded)")
+                    page.wait_for_timeout(3000)
+                except Exception as e:
+                    logger.warning(f"⚠️ domcontentloaded failed, trying load strategy: {e}")
+                    try:
+                        # Fallback to basic load
+                        page.goto(article_url, wait_until='load', timeout=25000)
+                        logger.info("✅ Page loaded (load)")
+                        page.wait_for_timeout(2000)
+                    except Exception as e2:
+                        logger.error(f"❌ Both load strategies failed: {e2}")
+                        context.close()
+                        browser.close()
+                        return None
 
-                    full_url = urljoin(article_url, img_url)
-                    alt_text = img.get('alt', '')
+                # Scroll to load dynamic content and wait for charts to render
+                try:
+                    # Scroll multiple times to trigger lazy loading
+                    logger.info(f"📜 Scrolling page to trigger chart loading...")
+                    page.evaluate("window.scrollTo(0, 800)")
+                    page.wait_for_timeout(5000)  # Increased to 5s
+                    page.evaluate("window.scrollTo(0, 1600)")
+                    page.wait_for_timeout(5000)  # Increased to 5s
+                    page.evaluate("window.scrollTo(0, 2400)")
+                    page.wait_for_timeout(5000)  # Increased to 5s
+                    logger.info(f"✅ Scrolled page to load dynamic content")
+                except Exception as e:
+                    logger.warning(f"⚠️ Scroll failed: {e}")
 
-                    image_urls.append({
-                        'url': full_url,
-                        'alt': alt_text,
-                        'type': 'img_tag'
-                    })
+                # Wait significantly longer for charts to fully render (live market data)
+                logger.info(f"⏳ Waiting 15 seconds for live market charts to fully render...")
+                page.wait_for_timeout(15000)  # Increased from 8s to 15s for live data
+                logger.info(f"✅ Chart rendering wait complete")
 
-            # Method 2: Find images in meta tags (og:image, twitter:image)
-            meta_images = soup.find_all('meta', property=re.compile(r'(og:image|twitter:image)'))
-            for meta in meta_images:
-                img_url = meta.get('content')
-                if img_url:
-                    full_url = urljoin(article_url, img_url)
-                    image_urls.append({
-                        'url': full_url,
-                        'alt': 'Meta tag image',
-                        'type': 'meta_tag'
-                    })
+                screenshot_data = None
 
-            # Method 3: Find images in picture tags
-            pictures = soup.find_all('picture')
-            for picture in pictures:
-                source = picture.find('source')
-                if source:
-                    img_url = source.get('srcset') or source.get('src')
-                    if img_url:
-                        if 'srcset' in str(img_url):
-                            img_url = img_url.split(',')[0].split()[0]
-                        full_url = urljoin(article_url, img_url)
-                        image_urls.append({
-                            'url': full_url,
-                            'alt': 'Picture source',
-                            'type': 'picture_tag'
-                        })
+                # Search for chart elements on page
+                logger.info(f"🔍 Searching for chart elements on page...")
 
-            # Method 4: Find images in inline styles and backgrounds
-            elements_with_style = soup.find_all(style=re.compile(r'background.*url'))
-            for element in elements_with_style:
-                style = element.get('style', '')
-                urls = re.findall(r'url\(["\']?(.*?)["\']?\)', style)
-                for url in urls:
-                    full_url = urljoin(article_url, url)
-                    image_urls.append({
-                        'url': full_url,
-                        'alt': 'Background image',
-                        'type': 'css_background'
-                    })
+                # Find chart elements - prioritize containers that include labels/legends
+                chart_selectors = [
+                    # Yahoo Finance specific
+                    'section[data-testid*="chart"]',  # Yahoo Finance chart section
+                    'div[data-testid*="chart"]',
+                    'div[id*="chart-"]',
+                    'section[class*="chart"]',
 
-            # Remove duplicates
-            seen = set()
-            unique_images = []
-            for img in image_urls:
-                if img['url'] not in seen:
-                    seen.add(img['url'])
-                    unique_images.append(img)
+                    # Generic chart containers (better than raw canvas)
+                    'div[class*="chart-container"]',
+                    'div[class*="chart-wrapper"]',
+                    'div[class*="Chart"]',
+                    'article[class*="chart"]',
+                    'figure[class*="chart"]',
 
-            # Filter out tiny images (likely icons/logos)
-            filtered_images = [
-                img for img in unique_images
-                if not any(skip in img['url'].lower() for skip in ['icon', 'logo', 'pixel', 'spacer', '1x1'])
-                and img['url'].startswith('http')
-                and self._is_likely_financial_image(img)
-            ]
+                    # Canvas/SVG as fallback
+                    'canvas',
+                    'svg[class*="chart"]',
+                    'svg[class*="highcharts"]',
+                ]
 
-            logger.info(f"📸 Extracted {len(filtered_images)} relevant images from article")
-            return filtered_images
+                for selector in chart_selectors:
+                    try:
+                        elements = page.query_selector_all(selector)
+                        logger.info(f"   Selector '{selector}': found {len(elements)} element(s)")
+
+                        if not elements:
+                            continue
+
+                        # Try multiple elements (first few) in case some are hidden
+                        elements_to_try = min(len(elements), 3)
+                        logger.info(f"   Will try first {elements_to_try} element(s)")
+
+                        for elem_idx in range(elements_to_try):
+                            element = elements[elem_idx]
+                            logger.info(f"   Trying element #{elem_idx + 1}/{elements_to_try}...")
+
+                            # Get bounding box first (before scrolling)
+                            box = element.bounding_box()
+                            if not box:
+                                logger.warning(f"   ⚠️ Element #{elem_idx + 1} has no bounding box, trying next...")
+                                continue
+
+                            if box['width'] < 200 or box['height'] < 100:
+                                logger.warning(f"   ⚠️ Element #{elem_idx + 1} too small ({box['width']}x{box['height']}), trying next...")
+                                continue
+
+                            logger.info(f"   ✅ Element #{elem_idx + 1} has valid size: {box['width']}x{box['height']}")
+
+                            # Try to scroll element into view (with timeout protection)
+                            try:
+                                element.scroll_into_view_if_needed(timeout=5000)
+                                logger.info(f"   ✅ Scrolled element into view")
+                                # Wait extra time after scrolling for chart to render
+                                logger.info(f"   ⏳ Waiting 10 seconds for chart to render after scroll...")
+                                page.wait_for_timeout(10000)  # Increased from 5s to 10s
+                            except Exception as scroll_error:
+                                logger.warning(f"   ⚠️ Scroll timeout/failed, continuing anyway: {scroll_error}")
+                                # Continue anyway - element might already be visible
+                                # Still wait a bit for rendering
+                                page.wait_for_timeout(5000)  # Increased from 3s to 5s
+
+                            # Use the element directly (we're already targeting containers)
+                            target_element = element
+                            logger.info(f"   📊 Using element: {box['width']}x{box['height']}")
+
+                            # Take screenshot with timeout protection
+                            try:
+                                logger.info(f"   📸 Taking screenshot...")
+                                screenshot_bytes = target_element.screenshot(
+                                    timeout=15000,  # Increased back to 15s
+                                    animations='disabled'
+                                )
+                                logger.info(f"   ✅ Screenshot captured: {len(screenshot_bytes)} bytes")
+                            except Exception as screenshot_error:
+                                logger.error(f"   ❌ Screenshot failed: {screenshot_error}")
+                                continue  # Try next element
+
+                            # Save screenshot
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
+                            filename = f"chart_{domain}_{timestamp}.png"
+
+                            project_root = Path(__file__).resolve().parent.parent.parent.parent
+                            screenshots_dir = project_root / "output" / "screenshots"
+                            screenshots_dir.mkdir(parents=True, exist_ok=True)
+                            filepath = screenshots_dir / filename
+
+                            with open(filepath, 'wb') as f:
+                                f.write(screenshot_bytes)
+
+                            logger.info(f"💾 Screenshot saved: {filepath}")
+
+                            screenshot_data = {
+                                'url': str(filepath).replace('\\', '/'),
+                                'title': f'Financial chart from {urlparse(article_url).netloc}',
+                                'source': urlparse(article_url).netloc,
+                                'type': 'screenshot',
+                                'relevance_score': 95,
+                                'telegram_compatible': True,
+                                'file_type': 'png',
+                                'trusted_source': True,
+                                'extraction_method': f'screenshot_{selector}',
+                                'source_article': article_url,
+                                'image_description': '',  # Will be filled by AI
+                                'content_type': 'image/png',
+                                'file_size': str(len(screenshot_bytes)),
+                            }
+
+                            break  # Found chart, stop trying elements
+
+                        # If we got a screenshot, stop trying selectors
+                        if screenshot_data:
+                            break
+
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Failed with selector '{selector}': {e}")
+                        continue
+
+                # Log if no charts were found at all
+                if not screenshot_data:
+                    logger.warning(f"❌ No usable chart elements found on page")
+                    logger.info(f"   Tried {len(chart_selectors)} different selectors")
+
+                context.close()
+                browser.close()
+
+                return screenshot_data
 
         except Exception as e:
-            logger.warning(f"Error extracting images from article: {e}")
-            return []
+            logger.error(f"Screenshot capture failed for {article_url}: {e}")
+            return None
 
-    def _is_likely_financial_image(self, img: Dict[str, Any]) -> bool:
-        """Check if image is likely financial/chart related"""
-        url_lower = img['url'].lower()
-        alt_lower = img.get('alt', '').lower()
-
-        # Financial image indicators
-        financial_indicators = [
-            'chart', 'graph', 'stock', 'market', 'trading', 'financial',
-            'price', 'data', 'analytics', 'report', 'earnings', 'revenue'
-        ]
-
-        # Check URL and alt text for financial indicators
-        return any(indicator in url_lower or indicator in alt_lower for indicator in financial_indicators)
-
-    def _verify_telegram_compatibility(self, images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Verify that images are compatible with Telegram"""
-        compatible_images = []
-
-        for image in images:
-            url = image.get('url', '')
-            if not url:
-                continue
-
-            # Check if URL looks like a direct image file
-            if self._is_direct_image_url(url):
-                verification_result = self._test_telegram_compatibility(url)
-                image.update(verification_result)
-                compatible_images.append(image)
-            else:
-                # Mark as incompatible but keep for reference
-                image['telegram_compatible'] = False
-                image['verification_status'] = 'not_direct_image'
-                compatible_images.append(image)
-
-        return compatible_images
-
-    def _is_direct_image_url(self, url: str) -> bool:
-        """Check if URL points to a direct image file"""
-        image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']
-        url_lower = url.lower()
-
-        # Check for direct image extensions
-        if any(url_lower.endswith(ext) for ext in image_extensions):
-            return True
-
-        # Check for image-like patterns
-        image_patterns = [
-            r'\.png(\?|$)',
-            r'\.jpe?g(\?|$)',
-            r'\.gif(\?|$)',
-            r'\.webp(\?|$)',
-            r'\.svg(\?|$)',
-            r'/images?/',
-            r'/charts?/',
-            r'chart.*\.(png|jpg)',
-            r'snapshot.*\.(png|jpg)'
-        ]
-
-        return any(re.search(pattern, url_lower) for pattern in image_patterns)
-
-    def _test_telegram_compatibility(self, url: str) -> Dict[str, Any]:
-        """Test if image URL works with Telegram"""
-        verification_data = {
-            'telegram_compatible': False,
-            'verification_status': 'not_tested',
-            'content_type': None,
-            'file_size': None,
-            'response_time': None
-        }
-
+    def _generate_ai_descriptions(self, extracted_images: List[Dict[str, Any]], search_content: str) -> List[Dict[str, Any]]:
+        """Generate AI descriptions for screenshots using Gemini Vision API"""
         try:
-            headers = {
-                'User-Agent': 'TelegramBot (like TwitterBot)',
-                'Accept': 'image/*,image/svg+xml,*/*;q=0.8'
-            }
+            import google.generativeai as genai
+            from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-            start_time = time.time()
-            response = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
-            response_time = time.time() - start_time
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                logger.error("❌ GOOGLE_API_KEY not found in environment")
+                return extracted_images
 
-            verification_data['response_time'] = round(response_time, 2)
+            # Configure Gemini
+            genai.configure(api_key=google_api_key)
 
-            if response.status_code == 200:
-                content_type = response.headers.get('content-type', '').lower()
-                content_length = response.headers.get('content-length')
+            # Use Gemini 2.5 Flash with vision
+            logger.info(f"   🤖 Initializing Gemini 2.5 Flash for vision analysis...")
+            model = genai.GenerativeModel(
+                'gemini-2.0-flash-exp',  # Gemini 2.5 Flash with vision support
+                generation_config={
+                    'temperature': 0.4,
+                    'top_p': 0.95,
+                    'top_k': 40,
+                    'max_output_tokens': 200,
+                }
+            )
+            logger.info(f"   ✅ Model initialized: gemini-2.0-flash-exp")
 
-                verification_data['content_type'] = content_type
-                verification_data['file_size'] = content_length
+            logger.info(f"🤖 Generating AI descriptions for {len(extracted_images)} images")
 
-                # Check if it's actually an image
-                if any(img_type in content_type for img_type in ['image/', 'png', 'jpeg', 'jpg', 'gif', 'svg']):
-                    # Check file size (Telegram limit is 10MB for photos)
-                    if content_length and int(content_length) < 10 * 1024 * 1024:  # 10MB
-                        verification_data['telegram_compatible'] = True
-                        verification_data['verification_status'] = 'compatible'
-                        logger.info(f"✅ Telegram-compatible image: {url}")
+            for img in extracted_images:
+                try:
+                    image_path = img.get('url', '')
+                    if not image_path or not os.path.exists(image_path):
+                        logger.warning(f"⚠️ Image file not found: {image_path}")
+                        img['image_description'] = 'Financial chart'
+                        continue
+
+                    logger.info(f"📸 Analyzing: {image_path}")
+
+                    # Load image using PIL
+                    pil_image = Image.open(image_path)
+
+                    # Convert to RGB if needed
+                    if pil_image.mode in ('RGBA', 'LA', 'P'):
+                        rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
+                        if pil_image.mode == 'P':
+                            pil_image = pil_image.convert('RGBA')
+                        rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
+                        pil_image = rgb_image
+
+                    # Create analysis prompt
+                    analysis_prompt = f"""You are a financial news analyst. Analyze this chart image and write a concise 1-2 sentence description.
+
+Context: {search_content[:300]}
+
+Requirements:
+1. Identify what financial instrument or market is shown (stock, index, commodity, etc.)
+2. Describe the trend or movement visible in the chart
+3. Include specific numbers if clearly visible (prices, percentages, values)
+4. Use past tense verbs (climbed, rose, fell, dropped, gained, declined)
+5. Write in professional news style
+6. Keep it to 1-2 sentences maximum
+
+Examples:
+- "S&P 500 index climbed 1.8% to 4,567 points showing strong market momentum."
+- "Tesla stock fell 3.2% to $245.80 amid profit-taking after recent rally."
+- "U.S. Treasury 10-year yields rose to 4.28% as investors assessed inflation data."
+
+Write ONLY the description, no additional text."""
+
+                    # Generate description with image
+                    logger.info(f"   🤖 Sending to Gemini Vision API...")
+                    try:
+                        response = model.generate_content(
+                            [analysis_prompt, pil_image],
+                            safety_settings={
+                                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                            }
+                        )
+                        logger.info(f"   ✅ Got response from Gemini Vision")
+                    except Exception as api_error:
+                        logger.error(f"   ❌ Gemini API call failed: {api_error}")
+                        img['image_description'] = 'Financial market chart'
+                        continue
+
+                    # Extract description
+                    if response and response.text:
+                        raw_description = response.text.strip()
+                        logger.info(f"   📝 Raw response: {raw_description[:100]}...")
+
+                        # Clean up description
+                        description = re.sub(r'^["\']+|["\']+$', '', raw_description)  # Remove quotes
+                        description = re.sub(r'\s+', ' ', description)  # Normalize spaces
+
+                        # Limit to 2 sentences
+                        sentences = [s.strip() for s in re.split(r'[.!?]+', description) if s.strip()]
+                        if len(sentences) > 2:
+                            description = '. '.join(sentences[:2]) + '.'
+                        elif sentences:
+                            description = '. '.join(sentences)
+                            if not description.endswith('.'):
+                                description += '.'
+
+                        # Truncate if too long
+                        if len(description) > 300:
+                            description = description[:297] + '...'
+
+                        # Validate description is not too generic
+                        generic_phrases = ['financial market chart', 'chart showing', 'graph displaying', 'unable to', 'cannot determine']
+                        is_generic = any(phrase in description.lower() for phrase in generic_phrases) and len(description) < 50
+
+                        if is_generic:
+                            logger.warning(f"⚠️ Description too generic, retrying with simpler prompt...")
+
+                            # Try again with a simpler, more direct prompt
+                            simple_prompt = f"""Look at this financial chart and describe what you see in 1-2 sentences.
+
+Include:
+- What is being shown (stock/index name and current value if visible)
+- The trend (up/down/stable)
+- Any specific numbers you can read
+
+Example: "S&P 500 index at 6,711.20 points, up 22.74 points, showing upward trend throughout the trading day."
+
+Description:"""
+
+                            retry_response = model.generate_content(
+                                [simple_prompt, pil_image],
+                                safety_settings={
+                                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                                }
+                            )
+
+                            if retry_response and retry_response.text:
+                                description = retry_response.text.strip()
+                                description = re.sub(r'^["\']+|["\']+$', '', description)
+                                description = re.sub(r'\s+', ' ', description)
+                                logger.info(f"   🔄 Retry description: {description[:100]}...")
+
+                        img['image_description'] = description
+                        logger.info(f"✅ Final description: {description}")
+
                     else:
-                        verification_data['verification_status'] = 'too_large'
-                        logger.warning(f"⚠️ Image too large for Telegram: {url}")
-                else:
-                    verification_data['verification_status'] = 'not_image'
-                    logger.warning(f"❌ Not an image file: {url}")
-            else:
-                verification_data['verification_status'] = f'http_{response.status_code}'
-                logger.warning(f"❌ HTTP {response.status_code}: {url}")
+                        logger.warning(f"⚠️ Empty response from Gemini")
+                        img['image_description'] = 'Financial market chart'
 
-        except requests.exceptions.Timeout:
-            verification_data['verification_status'] = 'timeout'
-            logger.warning(f"⏱️ Timeout testing: {url}")
-        except requests.exceptions.ConnectionError:
-            verification_data['verification_status'] = 'connection_error'
-            logger.warning(f"🔌 Connection error: {url}")
+                    # Small delay to avoid rate limits
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    logger.error(f"❌ AI description generation failed: {e}")
+                    img['image_description'] = 'Financial market chart'
+                    continue
+
+            return extracted_images
+
         except Exception as e:
-            verification_data['verification_status'] = f'error_{str(e)[:20]}'
-            logger.warning(f"❌ Test error: {url} - {e}")
-
-        return verification_data
+            logger.error(f"❌ AI description system failed: {e}")
+            # Return images with default descriptions
+            for img in extracted_images:
+                if not img.get('image_description'):
+                    img['image_description'] = 'Financial market chart'
+            return extracted_images
 
     def _save_image_results(self, extracted_images: List[Dict[str, Any]], search_content: str) -> str:
         """Save scraped image details to output/image_results directory"""
@@ -456,14 +573,7 @@ class EnhancedImageFinder(BaseTool):
                     "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'),
                     "search_content": search_content[:200] + "..." if len(search_content) > 200 else search_content,
                     "total_images_found": len(extracted_images),
-                    "telegram_compatible_count": len([img for img in extracted_images if img.get('telegram_compatible', False)]),
                     "extraction_date": datetime.now().isoformat()
-                },
-                "extraction_summary": {
-                    "sources_scraped": list(set([img.get('source', 'unknown') for img in extracted_images])),
-                    "extraction_methods": list(set([img.get('extraction_method', 'unknown') for img in extracted_images])),
-                    "file_types": list(set([img.get('file_type', 'unknown') for img in extracted_images])),
-                    "trusted_sources_count": len([img for img in extracted_images if img.get('trusted_source', False)])
                 },
                 "extracted_images": []
             }
@@ -474,23 +584,15 @@ class EnhancedImageFinder(BaseTool):
                     "image_number": idx,
                     "url": img.get('url', ''),
                     "title": img.get('title', 'Unknown Title'),
-                    "alt_text": img.get('alt_text', ''),
                     "source": img.get('source', 'Unknown Source'),
                     "source_article": img.get('source_article', ''),
                     "extraction_method": img.get('extraction_method', 'unknown'),
                     "file_type": img.get('file_type', 'unknown'),
+                    "image_description": img.get('image_description', ''),
                     "relevance_score": img.get('relevance_score', 0),
                     "telegram_compatible": img.get('telegram_compatible', False),
-                    "trusted_source": img.get('trusted_source', False),
-                    "verification_status": img.get('verification_status', 'not_verified'),
                     "content_type": img.get('content_type'),
                     "file_size": img.get('file_size'),
-                    "response_time": img.get('response_time'),
-                    "vision_relevance_score": img.get('vision_relevance_score', 0),
-                    "is_financial_content": img.get('is_financial_content', False),
-                    "vision_content_type": img.get('vision_content_type', 'unknown'),
-                    "vision_analysis_summary": img.get('vision_analysis_summary', ''),
-                    "vision_confidence": img.get('vision_confidence', 0),
                     "extraction_timestamp": datetime.now().isoformat()
                 }
                 image_results_data["extracted_images"].append(image_detail)
@@ -505,146 +607,3 @@ class EnhancedImageFinder(BaseTool):
         except Exception as e:
             logger.warning(f"Failed to save image results: {e}")
             return ""
-
-    def _analyze_images_for_relevance(self, extracted_images: List[Dict[str, Any]], search_content: str) -> List[Dict[str, Any]]:
-        """Analyze images using Gemini Vision to determine financial relevance and filter out generic content"""
-        logger.info(f"🔍 Analyzing {len(extracted_images)} images for financial relevance using Gemini Vision")
-
-        analyzed_images = []
-
-        for img in extracted_images:
-            try:
-                image_url = img.get('url', '')
-                if not image_url:
-                    continue
-
-                # Analyze the image using Gemini Vision
-                vision_analysis = self._analyze_single_image(image_url, search_content)
-
-                # Add vision analysis data to image
-                img.update({
-                    'vision_relevance_score': vision_analysis.get('relevance_score', 0),
-                    'is_financial_content': vision_analysis.get('is_financial', False),
-                    'vision_content_type': vision_analysis.get('content_type', 'unknown'),
-                    'vision_analysis_summary': vision_analysis.get('summary', ''),
-                    'vision_confidence': vision_analysis.get('confidence', 0)
-                })
-
-                analyzed_images.append(img)
-
-                # Add a small delay to avoid rate limiting
-                time.sleep(0.5)
-
-            except Exception as e:
-                logger.warning(f"Failed to analyze image {image_url}: {e}")
-                # Keep image with default low score if analysis fails
-                img.update({
-                    'vision_relevance_score': 30,
-                    'is_financial_content': False,
-                    'vision_content_type': 'analysis_failed',
-                    'vision_analysis_summary': f'Analysis failed: {str(e)}',
-                    'vision_confidence': 0
-                })
-                analyzed_images.append(img)
-                continue
-
-        logger.info(f"🎯 Vision analysis completed for {len(analyzed_images)} images")
-        return analyzed_images
-
-    def _analyze_single_image(self, image_url: str, context: str) -> Dict[str, Any]:
-        """Analyze a single image using Gemini Vision to determine financial relevance"""
-        try:
-            from crewai import Agent, Task, Crew, Process
-            from ..agents import FinancialAgents
-
-            # Create image analysis agent
-            agents_factory = FinancialAgents()
-            analysis_agent = agents_factory.image_analysis_agent()
-
-            # Create analysis task
-            analysis_prompt = f"""
-            Analyze this financial image URL: {image_url}
-
-            Financial context: {context[:300]}
-
-            Determine the following:
-            1. Is this a relevant financial chart, graph, or data visualization? (Yes/No)
-            2. Relevance score (0-100) for financial content
-            3. Content type classification
-            4. Brief summary of what the image shows
-
-            SCORING GUIDELINES:
-            - HIGH SCORE (80-100): Stock charts, market indices, earnings graphs, financial data visualizations, trading charts
-            - MEDIUM SCORE (40-79): Business-related content but not pure financial data (company logos in context, financial news photos)
-            - LOW SCORE (0-39): Generic images, ads, author photos, banners, unrelated content, website logos
-
-            CONTENT TYPES:
-            - stock_chart: Individual stock price charts
-            - market_index: Market index charts (S&P 500, NASDAQ, etc.)
-            - earnings_chart: Earnings or financial performance charts
-            - trading_chart: Technical analysis or trading charts
-            - financial_data: Other financial data visualizations
-            - business_photo: Business-related but not financial data
-            - logo: Company or website logos
-            - generic_photo: Author photos, generic images
-            - advertisement: Ad banners or promotional images
-            - unknown: Cannot determine content
-
-            Return ONLY a JSON response with this exact format:
-            {{
-                "relevance_score": 85,
-                "is_financial": true,
-                "content_type": "stock_chart",
-                "summary": "Apple Inc stock price chart showing recent performance",
-                "confidence": 90
-            }}
-            """
-
-            analysis_task = Task(
-                description=analysis_prompt,
-                expected_output="JSON with image analysis results including relevance score, content type, and summary",
-                agent=analysis_agent
-            )
-
-            crew = Crew(
-                agents=[analysis_agent],
-                tasks=[analysis_task],
-                process=Process.sequential,
-                verbose=False
-            )
-
-            result = crew.kickoff()
-
-            # Parse the JSON response
-            import json
-            import re
-
-            # Extract JSON from the result
-            json_match = re.search(r'\{.*\}', str(result), re.DOTALL)
-            if json_match:
-                analysis_data = json.loads(json_match.group())
-
-                # Validate required fields
-                required_fields = ['relevance_score', 'is_financial', 'content_type']
-                if all(field in analysis_data for field in required_fields):
-                    return analysis_data
-                else:
-                    logger.warning(f"Incomplete analysis data: {analysis_data}")
-                    return self._get_default_analysis()
-            else:
-                logger.warning(f"No JSON found in analysis result: {result}")
-                return self._get_default_analysis()
-
-        except Exception as e:
-            logger.warning(f"Image analysis failed for {image_url}: {e}")
-            return self._get_default_analysis()
-
-    def _get_default_analysis(self) -> Dict[str, Any]:
-        """Return default analysis when vision analysis fails"""
-        return {
-            'relevance_score': 30,
-            'is_financial': False,
-            'content_type': 'analysis_failed',
-            'summary': 'Vision analysis failed',
-            'confidence': 0
-        }

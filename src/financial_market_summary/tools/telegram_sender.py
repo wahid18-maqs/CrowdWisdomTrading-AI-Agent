@@ -11,7 +11,7 @@ from crewai.tools import BaseTool
 from .image_finder import EnhancedImageFinderInput as ImageFinderInput
 from .image_finder import EnhancedImageFinder as ImageFinder
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 load_dotenv()
 
@@ -571,6 +571,32 @@ class EnhancedTelegramSender(BaseTool):
             logger.warning(f"Error extracting verified image: {e}")
             return None
 
+    def _get_latest_search_results_file(self) -> str:
+        """Get the most recent search results file from output/search_results directory"""
+        try:
+            from pathlib import Path
+            import glob
+
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            search_results_dir = project_root / "output" / "search_results"
+
+            if not search_results_dir.exists():
+                return ""
+
+            # Get all search_results JSON files
+            search_files = list(search_results_dir.glob("search_results_*.json"))
+
+            if not search_files:
+                return ""
+
+            # Get the most recent file
+            latest_file = max(search_files, key=lambda p: p.stat().st_mtime)
+            return str(latest_file)
+
+        except Exception as e:
+            logger.error(f"Error finding search results file: {e}")
+            return ""
+
     def _find_telegram_compatible_image(self, original_content: str, structured_data: Dict[str, Any]) -> Dict[str, str]:
         verified_image = structured_data.get("verified_image")
         if verified_image and verified_image.get("telegram_compatible", False):
@@ -590,14 +616,22 @@ class EnhancedTelegramSender(BaseTool):
                 search_parts.append(structured_data["title"])
             if structured_data.get("key_points"):
                 search_parts.extend(structured_data["key_points"][:2])
-            
+
             search_content = " ".join(search_parts)[:500]
             stocks = self._extract_stock_symbols(original_content)
-            
+
+            # Get most recent search results file
+            search_results_file = self._get_latest_search_results_file()
+
+            if not search_results_file:
+                logger.warning("No search results file found")
+                return {}
+
             image_input = ImageFinderInput(
-                search_content=search_content, 
+                search_content=search_content,
                 mentioned_stocks=stocks,
-                max_images=3
+                max_images=3,
+                search_results_file=search_results_file
             )
             results_json = self.image_finder._run(**image_input.dict())
             
@@ -607,9 +641,11 @@ class EnhancedTelegramSender(BaseTool):
                     for image in images:
                         if image.get('telegram_compatible', False):
                             logger.info(f"🖼️ Using Telegram-compatible image from finder: {image.get('title', 'Unknown')}")
+                            # Use AI-generated description if available, otherwise use title
+                            description = image.get("image_description", "") or image.get("title", "Financial Chart")
                             return {
                                 "url": image["url"],
-                                "title": image.get("title", "Financial Chart"),
+                                "title": description,
                                 "source": "Enhanced Image Finder",
                                 "telegram_compatible": True,
                                 "type": "finder_result"
@@ -1099,6 +1135,14 @@ class EnhancedTelegramSender(BaseTool):
 
     def _send_photo(self, image_url: str, caption: str) -> bool:
         try:
+            import os
+
+            # Check if it's a local file
+            if os.path.isfile(image_url):
+                logger.info(f"📁 Sending local file: {image_url}")
+                return self._send_photo_from_file(image_url, caption)
+
+            # For remote URLs, test accessibility first
             if not self._test_image_accessibility(image_url):
                 logger.warning(f"Image URL not accessible, skipping photo send: {image_url}")
                 return False
@@ -1114,7 +1158,7 @@ class EnhancedTelegramSender(BaseTool):
                 "caption": caption_encoded[:1024],
                 "parse_mode": "HTML"
             }
-            
+
             response = requests.post(f"{self.base_url}/sendPhoto", json=payload, timeout=30,
                                    headers={'Content-Type': 'application/json; charset=utf-8'})
             
@@ -1139,6 +1183,41 @@ class EnhancedTelegramSender(BaseTool):
             return False
         except Exception as e:
             logger.error(f"❌ Telegram photo send unexpected error: {e}")
+            return False
+
+    def _send_photo_from_file(self, file_path: str, caption: str) -> bool:
+        """Send a photo from a local file to Telegram"""
+        try:
+            if isinstance(caption, str):
+                caption_encoded = caption.encode('utf-8').decode('utf-8')
+            else:
+                caption_encoded = str(caption)
+
+            with open(file_path, 'rb') as photo_file:
+                files = {'photo': photo_file}
+                data = {
+                    'chat_id': self.chat_id,
+                    'caption': caption_encoded[:1024],
+                    'parse_mode': 'HTML'
+                }
+
+                response = requests.post(f"{self.base_url}/sendPhoto", data=data, files=files, timeout=30)
+
+            if response.ok:
+                response_data = response.json()
+                if response_data.get("ok", False):
+                    logger.info(f"✅ Telegram photo sent successfully from local file")
+                    return True
+                else:
+                    error_description = response_data.get('description', 'Unknown error')
+                    logger.error(f"❌ Telegram photo send failed: {error_description}")
+                    return False
+            else:
+                logger.error(f"❌ Telegram photo send HTTP error: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Error sending photo from file: {e}")
             return False
 
     def _test_image_accessibility(self, url: str) -> bool:
@@ -1277,10 +1356,14 @@ class EnhancedTelegramSender(BaseTool):
         """Handle the new two-message format for Telegram delivery."""
         try:
             logger.info("📱 Processing two-message format for Telegram delivery")
+            logger.info(f"🔍 Content length: {len(content)} chars")
+            logger.info(f"🔍 Has TELEGRAM_IMAGE_DATA: {'---TELEGRAM_IMAGE_DATA---' in content}")
 
             # Extract the two messages
             parts = content.split("=== TELEGRAM_TWO_MESSAGE_FORMAT ===")[1]
             sections = parts.split("---TELEGRAM_IMAGE_DATA---")
+
+            logger.info(f"🔍 Number of sections after split: {len(sections)}")
 
             message_section = sections[0].strip()
             image_data_raw = {}
@@ -1288,8 +1371,10 @@ class EnhancedTelegramSender(BaseTool):
             if len(sections) > 1:
                 try:
                     image_data_raw = json.loads(sections[1].strip())
-                except:
-                    logger.warning("Failed to parse image data")
+                    logger.info(f"✅ Parsed image_data_raw successfully")
+                    logger.info(f"🔍 image_data_raw keys: {list(image_data_raw.keys())}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse image data: {e}")
 
             # Extract individual messages
             lines = message_section.split('\n')
@@ -1317,19 +1402,53 @@ class EnhancedTelegramSender(BaseTool):
             logger.info(f"   Caption: {len(image_caption)} chars")
             logger.info(f"   Summary: {len(full_summary)} chars")
 
-            # Prepare image data
-            image_data = {}
-            if image_data_raw and image_data_raw.get('primary_image'):
-                primary_image = image_data_raw['primary_image']
-                image_url = primary_image.get('url', '')
+            # SIMPLE APPROACH: Find latest screenshot and its image results JSON
+            import os
+            from pathlib import Path
 
-                if image_url and self._verify_image_url(image_url):
-                    image_data = {
-                        "url": image_url,
-                        "title": primary_image.get('description', 'Financial Chart'),
-                        "telegram_compatible": primary_image.get('telegram_compatible', True)
-                    }
-                    logger.info(f"✅ Image verified: {image_data['title']}")
+            image_data = {}
+            ai_image_description = None
+
+            try:
+                # Find latest screenshot
+                project_root = Path(__file__).resolve().parent.parent.parent.parent
+                screenshots_dir = project_root / "output" / "screenshots"
+
+                if screenshots_dir.exists():
+                    screenshots = list(screenshots_dir.glob("chart_*.png"))
+                    if screenshots:
+                        # Get most recent screenshot
+                        latest_screenshot = max(screenshots, key=lambda p: p.stat().st_mtime)
+                        logger.info(f"📸 Found latest screenshot: {latest_screenshot.name}")
+
+                        # Find corresponding image results JSON
+                        image_results_dir = project_root / "output" / "image_results"
+                        if image_results_dir.exists():
+                            image_jsons = list(image_results_dir.glob("image_results_*.json"))
+                            if image_jsons:
+                                latest_json = max(image_jsons, key=lambda p: p.stat().st_mtime)
+                                logger.info(f"📄 Found image results: {latest_json.name}")
+
+                                with open(latest_json, 'r', encoding='utf-8') as f:
+                                    results = json.load(f)
+                                    if results.get('extracted_images'):
+                                        first_image = results['extracted_images'][0]
+                                        ai_image_description = first_image.get('image_description', '')
+                                        logger.info(f"✅ Got AI description: {ai_image_description}")
+
+                        image_data = {
+                            "url": str(latest_screenshot),
+                            "title": ai_image_description or 'Financial Chart',
+                            "telegram_compatible": True
+                        }
+                        logger.info(f"✅ Image ready: {latest_screenshot.name}")
+                    else:
+                        logger.warning("❌ No screenshots found")
+                else:
+                    logger.warning("❌ Screenshots directory doesn't exist")
+
+            except Exception as e:
+                logger.error(f"❌ Error finding image: {e}")
 
             # Send Message 1: Image with Caption (ONLY if image is available and accessible)
             message1_success = False
@@ -1337,8 +1456,11 @@ class EnhancedTelegramSender(BaseTool):
 
             if image_data and image_data.get("url"):
                 has_valid_image = True
-                logger.info("📷 Sending Message 1: Image with Caption")
-                message1_success = self._send_photo(image_data["url"], image_caption)
+                # Use AI-generated image description as caption instead of generic image_caption
+                actual_caption = ai_image_description if ai_image_description else image_caption
+                logger.info("📷 Sending Message 1: Image with AI-generated Caption")
+                logger.info(f"   Caption: {actual_caption[:100]}...")
+                message1_success = self._send_photo(image_data["url"], actual_caption)
                 if message1_success:
                     logger.info("✅ Message 1 (Image + Caption) sent successfully")
                     # Add delay between messages
@@ -1415,6 +1537,13 @@ class EnhancedTelegramSender(BaseTool):
 
     def _verify_image_url(self, url: str) -> bool:
         """Verify that an image URL is accessible."""
+        import os
+
+        # Check if it's a local file path
+        if os.path.isfile(url):
+            logger.info(f"✅ Local file path verified: {url}")
+            return True
+
         # Trusted financial chart sources - skip verification for known reliable sources
         trusted_chart_domains = [
             'finviz.com',

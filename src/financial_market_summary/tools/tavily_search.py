@@ -1925,15 +1925,17 @@ class TavilyFinancialTool(BaseTool):
         image_info = {
             "primary_image": {
                 "url": image_data.get("url", "") if image_data else "",
-                "description": image_data.get("title", "Financial Chart") if image_data else "",
-                "type": image_data.get("type", "financial_chart") if image_data else "",
+                "title": image_data.get("title", "Financial Chart") if image_data else "",
+                "image_description": image_data.get("image_description", "") if image_data else "",
+                "description": image_data.get("image_description", "") if image_data else "",
+                "type": image_data.get("file_type", "financial_chart") if image_data else "",
                 "source": image_data.get("source", "Unknown") if image_data else "",
+                "source_article": image_data.get("source_article", "") if image_data else "",
                 "telegram_compatible": image_data.get("telegram_compatible", False) if image_data else False,
-                "verification_status": image_data.get("verification_status", "unknown") if image_data else "unknown",
                 "relevance_score": image_data.get("relevance_score", 0) if image_data else 0,
-                "from_search_results": image_data.get("from_search_results", False) if image_data else False,
-                "source_url": image_data.get("source_url", "") if image_data else "",
-                "source_domain": image_data.get("source_domain", "") if image_data else ""
+                "extraction_method": image_data.get("extraction_method", "") if image_data else "",
+                "content_type": image_data.get("content_type", "") if image_data else "",
+                "file_size": image_data.get("file_size", "") if image_data else ""
             }
         }
 
@@ -1957,6 +1959,9 @@ class TavilyFinancialTool(BaseTool):
 
         logger.info(f"📝 Two-message format combined with image data")
         logger.info(f"📊 Has image: {bool(image_data and image_data.get('url'))}")
+        logger.info(f"📏 Combined content length: {len(combined_content)} chars")
+        logger.info(f"🔍 Contains IMAGE_DATA marker: {'---TELEGRAM_IMAGE_DATA---' in combined_content}")
+        logger.info(f"📄 Last 200 chars: ...{combined_content[-200:]}")
 
         return combined_content
 
@@ -2002,14 +2007,14 @@ class TavilyFinancialTool(BaseTool):
                     "has_image": image_data is not None,
                     "image_url": image_data.get("url", "") if image_data else "",
                     "image_title": image_data.get("title", "") if image_data else "",
+                    "image_description": image_data.get("image_description", "") if image_data else "",
                     "image_source": image_data.get("source", "") if image_data else "",
-                    "source_article_link": image_data.get("source_url", "") if image_data else "",
-                    "source_domain": image_data.get("source_domain", "") if image_data else "",
+                    "source_article_link": image_data.get("source_article", "") if image_data else "",
+                    "source_domain": image_data.get("source", "") if image_data else "",
                     "telegram_compatible": image_data.get("telegram_compatible", False) if image_data else False,
-                    "verification_status": image_data.get("verification_status", "") if image_data else "",
                     "relevance_score": image_data.get("relevance_score", 0) if image_data else 0,
-                    "from_search_results": image_data.get("from_search_results", False) if image_data else False,
-                    "image_type": image_data.get("type", "") if image_data else ""
+                    "image_type": image_data.get("file_type", "") if image_data else "",
+                    "extraction_method": image_data.get("extraction_method", "") if image_data else ""
                 }
             }
 
