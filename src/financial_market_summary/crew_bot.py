@@ -603,13 +603,23 @@ class FinancialMarketCrew:
             self.execution_results["validation"] = validation_results
 
             logger.info("✅ Ultra-simplified workflow completed successfully")
+
+            # Count successful sends (English + translations)
+            sends_completed = 0
+            if isinstance(send_results.get("raw_telegram"), str) and "successfully" in send_results["raw_telegram"].lower():
+                sends_completed += 1
+            if isinstance(send_results.get("translations"), dict):
+                for lang, result in send_results["translations"].items():
+                    if isinstance(result, str) and "successfully" in result.lower():
+                        sends_completed += 1
+
             return {
                 "status": "success",
                 "results": self.execution_results,
                 "execution_time": datetime.now().isoformat(),
                 "summary": {
                     "workflow_type": "ultra_simplified_search_to_telegram",
-                    "sends_completed": len([k for k, v in send_results.items() if "successfully" in v.lower()]),
+                    "sends_completed": sends_completed,
                     "confidence_score": validation_results["confidence_score"],
                     "validation_passed": True,
                     "message_type": "raw_content_telegram"

@@ -1908,6 +1908,14 @@ class TavilyFinancialTool(BaseTool):
         image_caption = summary_dict.get("image_caption", "")
         full_summary = summary_dict.get("full_summary", "")
 
+        # IMPORTANT: Replace generic caption with AI-generated image description
+        if image_data and image_data.get("image_description"):
+            ai_description = image_data.get("image_description", "")
+            logger.info(f"🤖 Replacing generic caption with AI description: {ai_description}")
+            image_caption = ai_description
+        else:
+            logger.info(f"📝 Using generic caption (no AI description available)")
+
         # Update Live Chart references if we have actual image data
         if image_data and image_data.get("url"):
             chart_description = image_data.get("title", "Financial Chart")

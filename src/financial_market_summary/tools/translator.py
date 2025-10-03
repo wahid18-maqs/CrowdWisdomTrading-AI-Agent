@@ -4,6 +4,9 @@ from typing import Optional
 from crewai.tools import BaseTool
 from pydantic import Field
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +27,13 @@ class TranslatorTool(BaseTool):
     Output: Translated content maintaining exact same structure"""
 
     api_key: Optional[str] = Field(default=None)
+    model: Optional[any] = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.api_key = os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment variables")
+            raise ValueError("GOOGLE_API_KEY not found in environment variables")
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
         logger.info("✅ Translator tool initialized with Gemini")

@@ -1177,18 +1177,21 @@ class EnhancedTelegramSender(BaseTool):
         return "Failed to send message"
 
     def _send_photo(self, image_url: str, caption: str) -> bool:
+        """Send photo to Telegram - supports local files and URLs"""
         try:
             import os
 
-            # Check if it's a local file
-            if os.path.isfile(image_url):
-                logger.info(f"📁 Sending local file: {image_url}")
-                return self._send_photo_from_file(image_url, caption)
+            logger.info(f"📤 Attempting to send photo: {image_url[:100]}")
 
-            # For remote URLs, test accessibility first
-            if not self._test_image_accessibility(image_url):
-                logger.warning(f"Image URL not accessible, skipping photo send: {image_url}")
-                return False
+            # Check if it's a local file - send as file upload
+            if os.path.isfile(image_url):
+                logger.info(f"✅ Local file exists, uploading to Telegram")
+                return self._send_photo_from_file(image_url, caption)
+            else:
+                logger.warning(f"⚠️ File not found locally: {image_url}")
+
+            # For remote URLs - send directly
+            logger.info(f"🌐 Sending remote URL: {image_url[:100]}")
 
             if isinstance(caption, str):
                 caption_encoded = caption.encode('utf-8').decode('utf-8')
@@ -1204,7 +1207,7 @@ class EnhancedTelegramSender(BaseTool):
 
             response = requests.post(f"{self.base_url}/sendPhoto", json=payload, timeout=30,
                                    headers={'Content-Type': 'application/json; charset=utf-8'})
-            
+
             if response.ok:
                 response_data = response.json()
                 if response_data.get("ok", False):
@@ -1217,15 +1220,9 @@ class EnhancedTelegramSender(BaseTool):
             else:
                 logger.error(f"❌ Telegram photo send HTTP error: {response.status_code} - {response.text}")
                 return False
-                
-        except requests.exceptions.Timeout:
-            logger.error(f"⏱️ Telegram photo send timeout for URL: {image_url}")
-            return False
-        except requests.exceptions.ConnectionError:
-            logger.error(f"🔌 Telegram photo send connection error for URL: {image_url}")
-            return False
+
         except Exception as e:
-            logger.error(f"❌ Telegram photo send unexpected error: {e}")
+            logger.error(f"❌ Error sending photo: {e}")
             return False
 
     def _send_photo_from_file(self, file_path: str, caption: str) -> bool:
@@ -1263,27 +1260,6 @@ class EnhancedTelegramSender(BaseTool):
             logger.error(f"❌ Error sending photo from file: {e}")
             return False
 
-    def _test_image_accessibility(self, url: str) -> bool:
-        try:
-            headers = {
-                'User-Agent': 'TelegramBot (like TwitterBot)',
-                'Accept': 'image/*,*/*;q=0.8'
-            }
-            response = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
-            if response.status_code == 200:
-                content_type = response.headers.get('content-type', '').lower()
-                if any(img_type in content_type for img_type in ['image/', 'png', 'jpeg', 'jpg', 'gif']):
-                    logger.info(f"✅ Image URL accessible and valid: {url}")
-                    return True
-                else:
-                    logger.warning(f"❌ URL not an image: {url} (Content-Type: {content_type})")
-                    return False
-            else:
-                logger.warning(f"❌ Image URL not accessible: {url} (Status: {response.status_code})")
-                return False
-        except Exception as e:
-            logger.warning(f"❌ Error testing image accessibility: {url} - {e}")
-            return False
 
     def _ensure_message_with_footer_fits(self, message: str) -> str:
         """Ensure message fits within 4096 characters while preserving live charts footer."""
@@ -1419,9 +1395,9 @@ class EnhancedTelegramSender(BaseTool):
                 except Exception as e:
                     logger.warning(f"Failed to parse image data: {e}")
 
-            # Extract individual messages
+            # Extract Message 1 (caption) and Message 2 (summary)
             lines = message_section.split('\n')
-            image_caption = ""
+            translated_caption = ""
             full_summary = ""
             current_section = None
 
@@ -1434,54 +1410,49 @@ class EnhancedTelegramSender(BaseTool):
                     continue
 
                 if current_section == "caption":
-                    image_caption += line + "\n"
+                    translated_caption += line + "\n"
                 elif current_section == "summary":
                     full_summary += line + "\n"
 
-            image_caption = image_caption.strip()
+            translated_caption = translated_caption.strip()
             full_summary = full_summary.strip()
 
-            logger.info(f"📝 Extracted messages:")
-            logger.info(f"   Caption: {len(image_caption)} chars")
-            logger.info(f"   Summary: {len(full_summary)} chars")
+            logger.info(f"📝 Extracted Message 2 (Summary): {len(full_summary)} chars")
+            logger.info(f"📝 Extracted Message 1 (Caption): {len(translated_caption)} chars")
 
-            # SIMPLE APPROACH: Find latest screenshot and its image results JSON
+            # Find latest screenshot and AI description
             import os
             from pathlib import Path
 
             image_data = {}
-            ai_image_description = None
+            english_ai_description = None
 
             try:
-                # Find latest screenshot
                 project_root = Path(__file__).resolve().parent.parent.parent.parent
                 screenshots_dir = project_root / "output" / "screenshots"
 
                 if screenshots_dir.exists():
                     screenshots = list(screenshots_dir.glob("chart_*.png"))
                     if screenshots:
-                        # Get most recent screenshot
                         latest_screenshot = max(screenshots, key=lambda p: p.stat().st_mtime)
                         logger.info(f"📸 Found latest screenshot: {latest_screenshot.name}")
 
-                        # Find corresponding image results JSON
-                        image_results_dir = project_root / "output" / "image_results"
-                        if image_results_dir.exists():
-                            image_jsons = list(image_results_dir.glob("image_results_*.json"))
-                            if image_jsons:
-                                latest_json = max(image_jsons, key=lambda p: p.stat().st_mtime)
-                                logger.info(f"📄 Found image results: {latest_json.name}")
-
-                                with open(latest_json, 'r', encoding='utf-8') as f:
-                                    results = json.load(f)
-                                    if results.get('extracted_images'):
-                                        first_image = results['extracted_images'][0]
-                                        ai_image_description = first_image.get('image_description', '')
-                                        logger.info(f"✅ Got AI description: {ai_image_description}")
+                        # For English only: read AI description from JSON
+                        if language.lower() == 'english':
+                            image_results_dir = project_root / "output" / "image_results"
+                            if image_results_dir.exists():
+                                image_jsons = list(image_results_dir.glob("image_results_*.json"))
+                                if image_jsons:
+                                    latest_json = max(image_jsons, key=lambda p: p.stat().st_mtime)
+                                    with open(latest_json, 'r', encoding='utf-8') as f:
+                                        results = json.load(f)
+                                        if results.get('extracted_images'):
+                                            first_image = results['extracted_images'][0]
+                                            english_ai_description = first_image.get('image_description', '')
+                                            logger.info(f"✅ Loaded English AI description: {english_ai_description}")
 
                         image_data = {
                             "url": str(latest_screenshot),
-                            "title": ai_image_description or 'Financial Chart',
                             "telegram_compatible": True
                         }
                         logger.info(f"✅ Image ready: {latest_screenshot.name}")
@@ -1493,22 +1464,25 @@ class EnhancedTelegramSender(BaseTool):
             except Exception as e:
                 logger.error(f"❌ Error finding image: {e}")
 
-            # Send Message 1: Image with Caption (ONLY if image is available and accessible)
+            # Determine caption based on language
+            if language.lower() == 'english':
+                # For English: use AI-generated description from Gemini Vision
+                final_caption = english_ai_description if english_ai_description else translated_caption
+                logger.info(f"📷 English: Using AI description as caption")
+            else:
+                # For translations: use translated Message 1
+                final_caption = translated_caption
+                logger.info(f"📷 {language}: Using translated Message 1 as caption")
+
+            logger.info(f"🔍 Final caption ({language}): {final_caption[:150]}...")
+
+            # Send Message 1: Image with Caption
             message1_success = False
             has_valid_image = False
 
-            if image_data and image_data.get("url"):
+            if image_data and image_data.get("url") and final_caption:
                 has_valid_image = True
-                # For English, use AI description; for translations, use translated caption
-                if language.lower() == 'english':
-                    actual_caption = ai_image_description if ai_image_description else image_caption
-                    logger.info("📷 Sending Message 1: Image with English AI description")
-                else:
-                    actual_caption = image_caption  # Use translated caption
-                    logger.info(f"📷 Sending Message 1: Image with {language} translated caption")
-
-                logger.info(f"   Caption: {actual_caption[:100]}...")
-                message1_success = self._send_photo(image_data["url"], actual_caption)
+                message1_success = self._send_photo(image_data["url"], final_caption)
                 if message1_success:
                     logger.info("✅ Message 1 (Image + Caption) sent successfully")
                     # Add delay between messages
@@ -1583,34 +1557,3 @@ class EnhancedTelegramSender(BaseTool):
         result = self._send_content(message, image_data)
         return result
 
-    def _verify_image_url(self, url: str) -> bool:
-        """Verify that an image URL is accessible."""
-        import os
-
-        # Check if it's a local file path
-        if os.path.isfile(url):
-            logger.info(f"✅ Local file path verified: {url}")
-            return True
-
-        # Trusted financial chart sources - skip verification for known reliable sources
-        trusted_chart_domains = [
-            'finviz.com',
-            'stockcharts.com',
-            'chart.yahoo.com',
-            'charts.ycharts.com'
-        ]
-
-        # If it's from a trusted chart source, assume it's valid
-        for domain in trusted_chart_domains:
-            if domain in url.lower():
-                logger.info(f"✅ Trusted chart domain detected: {domain}")
-                return True
-
-        # For other URLs, do the regular verification
-        try:
-            import requests
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.head(url, headers=headers, timeout=5)
-            return response.status_code == 200
-        except:
-            return False

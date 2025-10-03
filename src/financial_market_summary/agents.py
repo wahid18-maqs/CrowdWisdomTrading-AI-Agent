@@ -6,6 +6,7 @@ from crewai.tools import BaseTool
 from .tools.telegram_sender import EnhancedTelegramSender
 from .tools.image_finder import EnhancedImageFinder as ImageFinder
 from .tools.tavily_search import TavilyFinancialTool
+from .tools.translator import TranslatorTool
 from dotenv import load_dotenv
 
 # Set up logging
@@ -23,6 +24,7 @@ class FinancialAgents:
         self.telegram_sender = EnhancedTelegramSender()
         self.image_finder = ImageFinder()
         self.tavily_tool = TavilyFinancialTool()
+        self.translator = TranslatorTool()
         
         # Set up the LLM with Google Gemini 2.5 Flash
         google_api_key = os.getenv("GOOGLE_API_KEY")
@@ -136,12 +138,12 @@ class FinancialAgents:
         )
 
     def send_agent(self) -> Agent:
-        """Creates an agent for sending summaries with verified sources to Telegram."""
+        """Creates an agent for sending summaries and translations to Telegram."""
         return Agent(
-            role="Telegram Content Distributor with Source and Image Verification",
-            goal="Send formatted financial summaries and their translations to a Telegram channel, ensuring all source links and images are working and verification status is clearly communicated to subscribers.",
-            backstory="You are a communication specialist skilled in distributing financial updates to Telegram channels with proper formatting, working source links, verified images, and clear verification indicators that build subscriber trust and credibility.",
-            tools=[self.telegram_sender],
+            role="Telegram Content Distributor and Translator",
+            goal="Send formatted financial summaries to Telegram in multiple languages (English, Arabic, Hindi, Hebrew), translating content while preserving financial data and routing to language-specific bots.",
+            backstory="You are a multilingual communication specialist skilled in distributing financial updates to Telegram channels. You translate content accurately while preserving stock symbols and numbers, and route messages to the appropriate language-specific bots.",
+            tools=[self.telegram_sender, self.translator],
             llm=self.llm,
             verbose=True
         )
