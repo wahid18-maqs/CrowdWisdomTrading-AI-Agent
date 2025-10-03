@@ -56,54 +56,60 @@ class FinancialTasks:
             context=[summary_task]
         )
         
-        # Task 4: Translate to Arabic
-        translate_arabic_task = Task(
-            description="Translate to Arabic keeping stock symbols (AAPL, MSFT) and all numbers unchanged.",
-            expected_output="Accurate Arabic translation with preserved financial data.",
-            agent=self.agents.translation_agent(),
-            context=[format_task]
-        )
-        
-        # Task 5: Translate to Hindi  
-        translate_hindi_task = Task(
-            description="Translate to Hindi keeping stock symbols and all numbers unchanged.",
-            expected_output="Accurate Hindi translation with preserved financial data.",
-            agent=self.agents.translation_agent(),
-            context=[format_task]
-        )
-        
-        # Task 6: Translate to Hebrew
-        translate_hebrew_task = Task(
-            description="Translate to Hebrew keeping stock symbols and all numbers unchanged.",
-            expected_output="Accurate Hebrew translation with preserved financial data.",
-            agent=self.agents.translation_agent(),
-            context=[format_task]
-        )
-        
-        # Task 7: Send to Telegram with Free Images
-        send_task = Task(
-            description="""Send all versions to Telegram using telegram_sender tool.
-            
-            Message format for each language:
-            - Catchy title (bold)
-            - Key points (bullets)
-            - Market implications (bullets)
-            
-            The enhanced telegram_sender will:
-            - Verify all images are from free sources
-            - Send text-only if no free images available
-            - Ensure all article links are accessible without paywalls""",
-            expected_output="Confirmation all versions sent to Telegram with free, accessible content only.",
+        # Task 4: Send English version
+        send_english_task = Task(
+            description="""Send English version to Telegram using telegram_sender tool with language='english'.
+
+            The telegram_sender will automatically:
+            - Find latest screenshot from output/screenshots/
+            - Extract AI description from image_results JSON
+            - Send Message 1: Image + AI description
+            - Send Message 2: Full summary with charts
+            - Route to English bot if configured""",
+            expected_output="Confirmation English version sent to Telegram.",
             agent=self.agents.send_agent(),
-            context=[format_task, translate_arabic_task, translate_hindi_task, translate_hebrew_task]
+            context=[format_task]
+        )
+
+        # Task 5: Translate to Arabic and send
+        translate_arabic_task = Task(
+            description="""1. Use financial_translator tool to translate content to Arabic
+            2. Use telegram_sender tool with language='arabic' to send to Arabic bot
+
+            CRITICAL: Preserve stock symbols, numbers, HTML tags, and two-message format.""",
+            expected_output="Arabic translation sent to Arabic Telegram bot.",
+            agent=self.agents.send_agent(),
+            context=[format_task]
+        )
+
+        # Task 6: Translate to Hindi and send
+        translate_hindi_task = Task(
+            description="""1. Use financial_translator tool to translate content to Hindi
+            2. Use telegram_sender tool with language='hindi' to send to Hindi bot
+
+            CRITICAL: Preserve stock symbols, numbers, HTML tags, and two-message format.""",
+            expected_output="Hindi translation sent to Hindi Telegram bot.",
+            agent=self.agents.send_agent(),
+            context=[format_task]
+        )
+
+        # Task 7: Translate to Hebrew and send
+        translate_hebrew_task = Task(
+            description="""1. Use financial_translator tool to translate content to Hebrew
+            2. Use telegram_sender tool with language='hebrew' to send to Hebrew bot
+
+            CRITICAL: Preserve stock symbols, numbers, HTML tags, and two-message format.""",
+            expected_output="Hebrew translation sent to Hebrew Telegram bot.",
+            agent=self.agents.send_agent(),
+            context=[format_task]
         )
         
         return [
             search_task,
             summary_task,
             format_task,
+            send_english_task,
             translate_arabic_task,
             translate_hindi_task,
-            translate_hebrew_task,
-            send_task
+            translate_hebrew_task
         ]

@@ -28,11 +28,34 @@ class EnhancedTelegramSender(BaseTool):
     chat_id: Optional[str] = None
     base_url: Optional[str] = None
     image_finder: Optional[ImageFinder] = None
+    bots: Optional[dict] = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+        # Default bot (English/fallback)
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+        # Language-specific bots configuration
+        self.bots = {
+            "english": {
+                "token": os.getenv("TELEGRAM_BOT_TOKEN_ENGLISH") or self.bot_token,
+                "chat_id": os.getenv("TELEGRAM_CHAT_ID_ENGLISH") or self.chat_id
+            },
+            "arabic": {
+                "token": os.getenv("TELEGRAM_BOT_TOKEN_ARABIC"),
+                "chat_id": os.getenv("TELEGRAM_CHAT_ID_ARABIC")
+            },
+            "hindi": {
+                "token": os.getenv("TELEGRAM_BOT_TOKEN_HINDI"),
+                "chat_id": os.getenv("TELEGRAM_CHAT_ID_HINDI")
+            },
+            "hebrew": {
+                "token": os.getenv("TELEGRAM_BOT_TOKEN_HEBREW"),
+                "chat_id": os.getenv("TELEGRAM_CHAT_ID_HEBREW")
+            }
+        }
 
         if not self.bot_token or not self.chat_id:
             raise ValueError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
@@ -48,15 +71,35 @@ class EnhancedTelegramSender(BaseTool):
             response = requests.get(f"{self.base_url}/getMe", timeout=10)
             if not response.ok:
                 return False
-            
+
             test_payload = {"chat_id": self.chat_id, "text": "Test"}
             response = requests.post(f"{self.base_url}/sendMessage", json=test_payload, timeout=30)
             return response.ok
         except:
             return False
 
+    def _set_bot_for_language(self, language: str) -> None:
+        """Switch to language-specific bot if configured"""
+        language_lower = language.lower()
+
+        # Check if language-specific bot is configured
+        bot_config = self.bots.get(language_lower)
+
+        if bot_config and bot_config.get('token') and bot_config.get('chat_id'):
+            # Switch to language-specific bot
+            self.bot_token = bot_config['token']
+            self.chat_id = bot_config['chat_id']
+            self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+            logger.info(f"✅ Switched to {language} bot")
+        else:
+            # Use default bot
+            logger.info(f"⚠️ No bot configured for {language}, using default bot")
+
     def _run(self, content: str, language: str = "english") -> str:
         try:
+            # Switch to language-specific bot if configured
+            self._set_bot_for_language(language)
+
             # Check if content has embedded Telegram image data from search
             if "---TELEGRAM_IMAGE_DATA---" in content:
                 logger.info(f"📊 Found Telegram-ready content with embedded image data for {language}")
@@ -1456,9 +1499,14 @@ class EnhancedTelegramSender(BaseTool):
 
             if image_data and image_data.get("url"):
                 has_valid_image = True
-                # Use AI-generated image description as caption instead of generic image_caption
-                actual_caption = ai_image_description if ai_image_description else image_caption
-                logger.info("📷 Sending Message 1: Image with AI-generated Caption")
+                # For English, use AI description; for translations, use translated caption
+                if language.lower() == 'english':
+                    actual_caption = ai_image_description if ai_image_description else image_caption
+                    logger.info("📷 Sending Message 1: Image with English AI description")
+                else:
+                    actual_caption = image_caption  # Use translated caption
+                    logger.info(f"📷 Sending Message 1: Image with {language} translated caption")
+
                 logger.info(f"   Caption: {actual_caption[:100]}...")
                 message1_success = self._send_photo(image_data["url"], actual_caption)
                 if message1_success:

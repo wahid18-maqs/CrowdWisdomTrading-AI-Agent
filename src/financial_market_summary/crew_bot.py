@@ -1070,8 +1070,55 @@ class FinancialMarketCrew:
             # No special format, send as plain text
             raw_send_task = self._create_text_only_task(summary_content, send_agent)
 
+        # Send English version
         result = self._run_task_with_retry([send_agent], raw_send_task)
-        return {"raw_telegram": result}
+
+        # Now translate and send to other languages
+        logger.info("🌍 Starting translation and sending to other language bots...")
+        translation_results = self._translate_and_send(summary_content, send_agent)
+
+        return {
+            "raw_telegram": result,
+            "translations": translation_results
+        }
+
+    def _translate_and_send(self, summary_content: str, send_agent) -> Dict[str, str]:
+        """Translate and send summary to Arabic, Hindi, and Hebrew bots"""
+        results = {}
+        languages = ['arabic', 'hindi', 'hebrew']
+
+        for language in languages:
+            try:
+                logger.info(f"🔄 Translating and sending to {language}...")
+
+                # Create task to translate and send
+                translate_task = Task(
+                    description=f"""Translate and send content to {language} Telegram bot:
+
+                    ORIGINAL CONTENT:
+                    {summary_content}
+
+                    INSTRUCTIONS:
+                    1. Use financial_translator tool with target_language='{language}' to translate the content
+                    2. The translator will preserve stock symbols, numbers, HTML tags, and two-message format
+                    3. After translation, use telegram_sender tool with language='{language}' to send
+                    4. The telegram_sender will automatically route to the {language} bot
+                    5. It will send Message 1 (image + translated caption) and Message 2 (translated summary)
+
+                    CRITICAL: Translate first, then send to the {language} bot.""",
+                    expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot.",
+                    agent=send_agent
+                )
+
+                result = self._run_task_with_retry([send_agent], translate_task)
+                results[language] = result
+                logger.info(f"✅ {language} translation sent successfully")
+
+            except Exception as e:
+                logger.error(f"❌ Failed to translate/send {language}: {e}")
+                results[language] = f"Error: {str(e)}"
+
+        return results
 
     def _create_text_only_task(self, text_content: str, send_agent) -> Task:
         """Create a text-only Telegram sending task"""
