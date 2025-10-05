@@ -866,7 +866,7 @@ class FinancialMarketCrew:
             4. Move Source section after Market Implications for attribution
             5. Keep Live Charts section last as supplementary resources
             6. Preserve ALL original content, formatting, and links exactly
-            7. Maintain language-specific text (Arabic, Hindi, Hebrew) without changes
+            7. Maintain language-specific text (Arabic, Hindi, Hebrew, German) without changes
             8. Keep bullet points (•) and HTML formatting intact
             9. Ensure source links remain clickable and properly formatted
             10. Apply this ordering consistently across all languages
@@ -1093,9 +1093,9 @@ class FinancialMarketCrew:
         }
 
     def _translate_and_send(self, summary_content: str, send_agent) -> Dict[str, str]:
-        """Translate and send summary to Arabic, Hindi, and Hebrew bots"""
+        """Translate and send summary to Arabic, Hindi, Hebrew, and German bots"""
         results = {}
-        languages = ['arabic', 'hindi', 'hebrew']
+        languages = ['arabic', 'hindi', 'hebrew', 'german']
 
         for language in languages:
             try:
@@ -1111,18 +1111,30 @@ class FinancialMarketCrew:
                     INSTRUCTIONS:
                     1. Use financial_translator tool with target_language='{language}' to translate the content
                     2. The translator will preserve stock symbols, numbers, HTML tags, and two-message format
-                    3. After translation, use telegram_sender tool with language='{language}' to send
-                    4. The telegram_sender will automatically route to the {language} bot
-                    5. It will send Message 1 (image + translated caption) and Message 2 (translated summary)
+                    3. After translation, use telegram_sender tool with EXACTLY these parameters:
+                       - content: [the translated content from step 1]
+                       - language: '{language}'
+                    4. The telegram_sender will automatically route to the {language.upper()} bot based on the language parameter
+                    5. If an image is available, send Message 1 (image + translated caption) and Message 2 (translated summary)
+                    6. If NO image is available, just send Message 2 (translated summary) - this is perfectly fine
 
-                    CRITICAL: Translate first, then send to the {language} bot.""",
-                    expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot.",
+                    CRITICAL:
+                    - The language parameter MUST be '{language}' (lowercase)
+                    - This ensures the message goes to the {language.upper()} bot, NOT the English bot
+                    - Always proceed with translation and sending, even if image is missing.""",
+                    expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot (with or without image).",
                     agent=send_agent
                 )
 
                 result = self._run_task_with_retry([send_agent], translate_task)
                 results[language] = result
                 logger.info(f"✅ {language} translation sent successfully")
+
+                # Add delay between translations to avoid quota limits
+                import time
+                if language != languages[-1]:  # Don't delay after last language
+                    logger.info(f"⏳ Waiting 10 seconds before next translation (quota management)...")
+                    time.sleep(10)
 
             except Exception as e:
                 logger.error(f"❌ Failed to translate/send {language}: {e}")

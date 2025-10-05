@@ -141,7 +141,7 @@ class FinancialAgents:
         """Creates an agent for sending summaries and translations to Telegram."""
         return Agent(
             role="Telegram Content Distributor and Translator",
-            goal="Send formatted financial summaries to Telegram in multiple languages (English, Arabic, Hindi, Hebrew), translating content while preserving financial data and routing to language-specific bots.",
+            goal="Send formatted financial summaries to Telegram in multiple languages (English, Arabic, Hindi, Hebrew, German), translating content while preserving financial data and routing to language-specific bots.",
             backstory="You are a multilingual communication specialist skilled in distributing financial updates to Telegram channels. You translate content accurately while preserving stock symbols and numbers, and route messages to the appropriate language-specific bots.",
             tools=[self.telegram_sender, self.translator],
             llm=self.llm,

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class TranslatorTool(BaseTool):
     name: str = "financial_translator"
-    description: str = """Translates financial market summaries to Arabic, Hindi, or Hebrew.
+    description: str = """Translates financial market summaries to Arabic, Hindi, Hebrew, or German.
 
     CRITICAL: Preserves all financial data unchanged:
     - Stock symbols (AAPL, MSFT, TSLA, etc.)
@@ -23,7 +23,7 @@ class TranslatorTool(BaseTool):
     - Two-message format structure
 
     Input: English content in two-message format
-    Language: 'arabic', 'hindi', or 'hebrew'
+    Language: 'arabic', 'hindi', 'hebrew', or 'german'
     Output: Translated content maintaining exact same structure"""
 
     api_key: Optional[str] = Field(default=None)
@@ -53,7 +53,7 @@ class TranslatorTool(BaseTool):
             logger.info(f"🌍 Starting translation to {target_language}")
 
             # Validate language
-            supported_languages = ['arabic', 'hindi', 'hebrew']
+            supported_languages = ['arabic', 'hindi', 'hebrew', 'german']
             if target_language.lower() not in supported_languages:
                 logger.error(f"❌ Unsupported language: {target_language}")
                 return f"Error: Unsupported language. Use: {', '.join(supported_languages)}"
@@ -121,47 +121,81 @@ class TranslatorTool(BaseTool):
         try:
             # Language-specific instructions
             language_instructions = {
-                'arabic': """Translate to Modern Standard Arabic (العربية الفصحى).
-                Use right-to-left (RTL) text formatting.
-                Preserve all English stock symbols and numbers exactly as they appear.""",
+                'arabic': """Translate ALL text to Modern Standard Arabic (العربية الفصحى).
+                Write in Arabic script from right-to-left.
+                ONLY keep stock symbols (AAPL, MSFT, etc.) and numbers in English.
+                Example: "Stock Market Today" becomes "سوق الأسهم اليوم" """,
 
-                'hindi': """Translate to Hindi (हिन्दी) using Devanagari script.
-                Keep formal tone suitable for financial news.
-                Preserve all English stock symbols and numbers exactly as they appear.""",
+                'hindi': """Translate ALL text to Hindi (हिन्दी) using Devanagari script.
+                Write in Hindi script.
+                ONLY keep stock symbols (AAPL, MSFT, etc.) and numbers in English.
+                Example: "Stock Market Today" becomes "आज का शेयर बाजार" """,
 
-                'hebrew': """Translate to Modern Hebrew (עברית).
-                Use right-to-left (RTL) text formatting.
-                Preserve all English stock symbols and numbers exactly as they appear."""
+                'hebrew': """Translate ALL text to Modern Hebrew (עברית).
+                Write in Hebrew script from right-to-left.
+                ONLY keep stock symbols (AAPL, MSFT, etc.) and numbers in English.
+                Example: "Stock Market Today" becomes "שוק המניות היום"
+                Use modern Hebrew, not biblical Hebrew.""",
+
+                'german': """Translate ALL text to German (Deutsch).
+                Use formal business German suitable for financial news.
+                ONLY keep stock symbols (AAPL, MSFT, etc.) and numbers in English.
+                Example: "Stock Market Today" becomes "Börse Heute"
+                Use proper German capitalization for nouns."""
             }
 
-            prompt = f"""You are a professional financial translator. Translate the following financial content to {target_language.upper()}.
+            prompt = f"""You are a professional financial translator. Your job is to translate English financial content to {target_language.upper()}.
 
-CRITICAL RULES:
-1. DO NOT translate stock symbols (AAPL, MSFT, TSLA, etc.) - keep them in English
-2. DO NOT change any numbers, percentages, or dates
-3. PRESERVE all HTML tags exactly: <b>, </b>, <a>, </a>, etc.
-4. PRESERVE all URLs and links unchanged
-5. Keep emojis in their original positions
-6. Maintain the exact same structure and formatting
+WHAT TO TRANSLATE (convert to {target_language} script):
+✅ ALL regular English words and sentences
+✅ Financial terms (market, stock, trading, etc.)
+✅ News headlines and summaries
+
+WHAT TO KEEP IN ENGLISH (do NOT translate):
+❌ Stock ticker symbols: AAPL, MSFT, TSLA, GOOGL, etc.
+❌ Numbers: 1.5%, $100, 5,000, etc.
+❌ HTML tags: <b>, </b>, <a>, </a>, <div>, etc.
+❌ URLs: https://... links
 
 {language_instructions.get(target_language, '')}
 
 CONTENT TO TRANSLATE:
 {text}
 
-IMPORTANT: Return ONLY the translated text. Do NOT add explanations or notes."""
+IMPORTANT: You MUST translate the text to {target_language} language and script. Return ONLY the translated text in {target_language}, no explanations."""
 
-            response = self.model.generate_content(
-                prompt,
-                generation_config={
-                    'temperature': 0.3,  # Low temperature for consistent translation
-                    'top_p': 0.95,
-                    'top_k': 40,
-                    'max_output_tokens': 2000,
-                }
-            )
+            # Add retry logic for quota errors
+            max_retries = 3
+            retry_delay = 15  # seconds
+            translated = ""
 
-            translated = response.text.strip()
+            for attempt in range(max_retries):
+                try:
+                    response = self.model.generate_content(
+                        prompt,
+                        generation_config={
+                            'temperature': 0.3,  # Low temperature for consistent translation
+                            'top_p': 0.95,
+                            'top_k': 40,
+                            'max_output_tokens': 2000,
+                        }
+                    )
+                    translated = response.text.strip()
+                    break  # Success, exit retry loop
+
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str or "quota" in error_str.lower() or "resource" in error_str.lower():
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️ Quota/rate limit error (attempt {attempt + 1}/{max_retries}), waiting {retry_delay}s...")
+                            import time
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff (15s, 30s, 60s)
+                        else:
+                            logger.error(f"❌ Max retries reached for {target_language}, quota still exceeded")
+                            raise
+                    else:
+                        raise  # Re-raise non-quota errors immediately
 
             # Verify translation preserved key elements
             if not self._verify_translation(text, translated):

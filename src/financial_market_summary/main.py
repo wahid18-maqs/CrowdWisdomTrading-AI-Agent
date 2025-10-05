@@ -245,7 +245,7 @@ if __name__ == "__main__":
                 'api_status': api_status,
                 'workflow_result': final_result,
                 'timestamp': datetime.now().isoformat()
-            }, f, indent=2, default=str)
+            }, f, indent=2, ensure_ascii=False, default=str)
         
         logger.info(f"Final results saved to: {result_file}")
         

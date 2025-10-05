@@ -54,6 +54,10 @@ class EnhancedTelegramSender(BaseTool):
             "hebrew": {
                 "token": os.getenv("TELEGRAM_BOT_TOKEN_HEBREW"),
                 "chat_id": os.getenv("TELEGRAM_CHAT_ID_HEBREW")
+            },
+            "german": {
+                "token": os.getenv("TELEGRAM_BOT_TOKEN_GERMAN"),
+                "chat_id": os.getenv("TELEGRAM_CHAT_ID_GERMAN")
             }
         }
 
@@ -82,18 +86,29 @@ class EnhancedTelegramSender(BaseTool):
         """Switch to language-specific bot if configured"""
         language_lower = language.lower()
 
+        logger.info(f"🔧 Attempting to switch bot for language: '{language}' (normalized: '{language_lower}')")
+
         # Check if language-specific bot is configured
         bot_config = self.bots.get(language_lower)
+
+        logger.info(f"🔍 Bot config found for {language_lower}: {bool(bot_config)}")
+        if bot_config:
+            logger.info(f"   Token exists: {bool(bot_config.get('token'))}")
+            logger.info(f"   Chat ID exists: {bool(bot_config.get('chat_id'))}")
+            if bot_config.get('token'):
+                logger.info(f"   Token preview: {bot_config['token'][:15]}...")
+            if bot_config.get('chat_id'):
+                logger.info(f"   Chat ID: {bot_config['chat_id']}")
 
         if bot_config and bot_config.get('token') and bot_config.get('chat_id'):
             # Switch to language-specific bot
             self.bot_token = bot_config['token']
             self.chat_id = bot_config['chat_id']
             self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
-            logger.info(f"✅ Switched to {language} bot")
+            logger.info(f"✅ Successfully switched to {language} bot (chat_id: {self.chat_id})")
         else:
             # Use default bot
-            logger.info(f"⚠️ No bot configured for {language}, using default bot")
+            logger.warning(f"⚠️ No bot configured for {language}, using default English bot (chat_id: {self.chat_id})")
 
     def _run(self, content: str, language: str = "english") -> str:
         try:
@@ -143,7 +158,7 @@ class EnhancedTelegramSender(BaseTool):
             logger.info(f"🔤 Message preview: {message[:200]}...")
 
             # Apply language-specific formatting for all non-English languages
-            if language.lower() in ["hindi", "arabic", "hebrew"]:
+            if language.lower() in ["hindi", "arabic", "hebrew", "german"]:
                 logger.info(f"🔄 Applying translation formatting for {language}")
                 message = self._apply_translation_formatting(message, language)
                 logger.info(f"✅ Final formatted message length: {len(message)} chars")
@@ -1354,6 +1369,63 @@ class EnhancedTelegramSender(BaseTool):
             logger.error(f"❌ Telegram message send unexpected error: {e}")
             return False
 
+    def _translate_image_description(self, english_description: str, target_language: str) -> str:
+        """Translate English AI image description to target language using Gemini"""
+        try:
+            import google.generativeai as genai
+
+            # Configure Gemini if not already done
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                logger.warning("No GOOGLE_API_KEY found, returning English description")
+                return english_description
+
+            genai.configure(api_key=google_api_key)
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+
+            # Language mapping
+            language_names = {
+                'arabic': 'Arabic (العربية)',
+                'hindi': 'Hindi (हिन्दी)',
+                'hebrew': 'Hebrew (עברית)',
+                'german': 'German (Deutsch)'
+            }
+
+            target_lang_name = language_names.get(target_language.lower(), target_language)
+
+            prompt = f"""Translate this financial chart description to {target_lang_name}.
+
+ORIGINAL ENGLISH DESCRIPTION:
+{english_description}
+
+RULES:
+1. Translate ALL text to {target_lang_name}
+2. Keep stock symbols in English (AAPL, MSFT, S&P 500, NASDAQ, etc.)
+3. Keep numbers exactly as they are (percentages, prices, values)
+4. Maintain the professional financial news tone
+5. Keep it concise (1-2 sentences maximum)
+
+Return ONLY the translated description, nothing else."""
+
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    'temperature': 0.3,
+                    'top_p': 0.95,
+                    'top_k': 40,
+                    'max_output_tokens': 300,
+                }
+            )
+
+            translated = response.text.strip()
+            logger.info(f"✅ Translated AI description to {target_language}: {translated[:100]}...")
+            return translated
+
+        except Exception as e:
+            logger.error(f"Failed to translate image description: {e}")
+            # Fallback to English description
+            return english_description
+
     def _process_telegram_ready_content(self, content: str, language: str) -> str:
         """Process content with two-message format and send both messages."""
         try:
@@ -1401,12 +1473,22 @@ class EnhancedTelegramSender(BaseTool):
             full_summary = ""
             current_section = None
 
+            # Debug: Log first few lines to see structure
+            logger.info(f"🔍 First 5 lines of message_section for {language}:")
+            for i, line in enumerate(lines[:5]):
+                logger.info(f"   Line {i}: '{line}'")
+
             for line in lines:
-                if line.startswith("Message 1 (Image Caption):"):
+                # Use .strip() to handle potential whitespace issues with RTL text
+                line_stripped = line.strip()
+
+                if line_stripped.startswith("Message 1") or "Message 1 (Image Caption)" in line:
                     current_section = "caption"
+                    logger.info(f"✓ Found Message 1 header in {language}")
                     continue
-                elif line.startswith("Message 2 (Full Summary):"):
+                elif line_stripped.startswith("Message 2") or "Message 2 (Full Summary)" in line:
                     current_section = "summary"
+                    logger.info(f"✓ Found Message 2 header in {language}")
                     continue
 
                 if current_section == "caption":
@@ -1417,8 +1499,42 @@ class EnhancedTelegramSender(BaseTool):
             translated_caption = translated_caption.strip()
             full_summary = full_summary.strip()
 
-            logger.info(f"📝 Extracted Message 2 (Summary): {len(full_summary)} chars")
-            logger.info(f"📝 Extracted Message 1 (Caption): {len(translated_caption)} chars")
+            logger.info(f"📝 [{language}] Extracted Message 2 (Summary): {len(full_summary)} chars")
+            logger.info(f"📝 [{language}] Extracted Message 1 (Caption): {len(translated_caption)} chars")
+
+            # CRITICAL VALIDATION: Ensure Message 2 is properly extracted
+            if not full_summary or len(full_summary) < 100:
+                logger.error(f"❌ [{language}] Message 2 extraction FAILED! Length: {len(full_summary) if full_summary else 0}")
+                logger.error(f"Attempting alternative extraction method...")
+
+                # Alternative method 1: Split by "Message 2" directly
+                if "Message 2" in message_section:
+                    parts = message_section.split("Message 2", 1)
+                    if len(parts) > 1:
+                        # Skip the header line, get everything after
+                        temp = parts[1].split('\n', 1)
+                        if len(temp) > 1:
+                            full_summary = temp[1].strip()
+                            logger.info(f"✅ Alternative extraction successful: {len(full_summary)} chars")
+
+                # Alternative method 2: Use entire translated content if still empty
+                if not full_summary or len(full_summary) < 100:
+                    logger.warning(f"⚠️ Alternative extraction also failed, reconstructing from original...")
+                    # Get the entire content after the first section marker
+                    full_summary = message_section
+                    logger.info(f"✅ Using entire message_section: {len(full_summary)} chars")
+
+            # FINAL VALIDATION: Reject if contains format markers (means parsing failed)
+            if "===" in full_summary or "TELEGRAM" in full_summary[:100]:
+                logger.error(f"❌ [{language}] Message 2 contains format markers! Cleaning...")
+                # Remove format markers
+                full_summary = full_summary.replace("=== TELEGRAM_TWO_MESSAGE_FORMAT ===", "")
+                full_summary = full_summary.replace("---TELEGRAM_IMAGE_DATA---", "")
+                # Remove "Message 1" and "Message 2" headers if they appear in content
+                lines = full_summary.split('\n')
+                cleaned_lines = [line for line in lines if not line.strip().startswith("Message 1") and not line.strip().startswith("Message 2")]
+                full_summary = '\n'.join(cleaned_lines).strip()
+                logger.info(f"✅ Cleaned format markers: {len(full_summary)} chars")
 
             # Find latest screenshot and AI description
             import os
@@ -1437,19 +1553,25 @@ class EnhancedTelegramSender(BaseTool):
                         latest_screenshot = max(screenshots, key=lambda p: p.stat().st_mtime)
                         logger.info(f"📸 Found latest screenshot: {latest_screenshot.name}")
 
-                        # For English only: read AI description from JSON
-                        if language.lower() == 'english':
-                            image_results_dir = project_root / "output" / "image_results"
-                            if image_results_dir.exists():
-                                image_jsons = list(image_results_dir.glob("image_results_*.json"))
-                                if image_jsons:
-                                    latest_json = max(image_jsons, key=lambda p: p.stat().st_mtime)
-                                    with open(latest_json, 'r', encoding='utf-8') as f:
-                                        results = json.load(f)
-                                        if results.get('extracted_images'):
-                                            first_image = results['extracted_images'][0]
-                                            english_ai_description = first_image.get('image_description', '')
-                                            logger.info(f"✅ Loaded English AI description: {english_ai_description}")
+                        # ALWAYS read AI description from JSON (needed for all languages)
+                        image_results_dir = project_root / "output" / "image_results"
+                        if image_results_dir.exists():
+                            image_jsons = list(image_results_dir.glob("image_results_*.json"))
+                            if image_jsons:
+                                latest_json = max(image_jsons, key=lambda p: p.stat().st_mtime)
+                                logger.info(f"📄 Reading AI description from: {latest_json.name}")
+                                with open(latest_json, 'r', encoding='utf-8') as f:
+                                    results = json.load(f)
+                                    if results.get('extracted_images'):
+                                        first_image = results['extracted_images'][0]
+                                        english_ai_description = first_image.get('image_description', '')
+                                        logger.info(f"✅ Loaded English AI description: {english_ai_description[:150]}...")
+                                    else:
+                                        logger.warning("⚠️ No extracted_images found in JSON")
+                            else:
+                                logger.warning("⚠️ No image_results JSON files found")
+                        else:
+                            logger.warning("⚠️ image_results directory doesn't exist")
 
                         image_data = {
                             "url": str(latest_screenshot),
@@ -1464,17 +1586,23 @@ class EnhancedTelegramSender(BaseTool):
             except Exception as e:
                 logger.error(f"❌ Error finding image: {e}")
 
-            # Determine caption based on language
-            if language.lower() == 'english':
-                # For English: use AI-generated description from Gemini Vision
-                final_caption = english_ai_description if english_ai_description else translated_caption
-                logger.info(f"📷 English: Using AI description as caption")
-            else:
-                # For translations: use translated Message 1
-                final_caption = translated_caption
-                logger.info(f"📷 {language}: Using translated Message 1 as caption")
+            # Determine caption based on language - ONLY use AI description
+            if english_ai_description:
+                if language.lower() == 'english':
+                    # For English: use AI-generated description from Gemini Vision
+                    final_caption = english_ai_description
+                    logger.info(f"📷 English: Using AI description as caption")
+                else:
+                    # For translations: translate the English AI description
+                    logger.info(f"🌍 Translating English AI description to {language}...")
+                    final_caption = self._translate_image_description(english_ai_description, language)
+                    logger.info(f"📷 {language}: Using translated AI description as caption")
 
-            logger.info(f"🔍 Final caption ({language}): {final_caption[:150]}...")
+                logger.info(f"🔍 Final caption ({language}): {final_caption[:150]}...")
+            else:
+                # No AI description available - skip image message entirely
+                logger.warning(f"⚠️ No AI description available for {language}, will skip image message")
+                final_caption = None
 
             # Send Message 1: Image with Caption
             message1_success = False
