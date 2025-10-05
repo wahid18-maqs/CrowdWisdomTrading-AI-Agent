@@ -24,11 +24,20 @@ def check_env_keys() -> bool:
     """
     required_keys = {
         "GOOGLE_API_KEY": "Gemini API key for LLM operations",
-        "TAVILY_API_KEY": "Tavily API key for news search",
-        "TELEGRAM_BOT_TOKEN": "Telegram bot token for sending messages",
-        "TELEGRAM_CHAT_ID": "Telegram chat ID for the target channel",
-        "SERPER_API_KEY": "Serper API key for backup search"
+        "TAVILY_API_KEY": "Tavily API key for news search"
     }
+
+    # Check for at least one Telegram bot configuration
+    telegram_bots = [
+        os.getenv("TELEGRAM_BOT_TOKEN"),
+        os.getenv("TELEGRAM_BOT_TOKEN_ARABIC"),
+        os.getenv("TELEGRAM_BOT_TOKEN_HINDI"),
+        os.getenv("TELEGRAM_BOT_TOKEN_HEBREW"),
+        os.getenv("TELEGRAM_BOT_TOKEN_GERMAN")
+    ]
+
+    if not any(telegram_bots):
+        required_keys["TELEGRAM_BOT_TOKEN or language-specific token"] = "At least one Telegram bot token is required"
     
     missing_keys = []
     

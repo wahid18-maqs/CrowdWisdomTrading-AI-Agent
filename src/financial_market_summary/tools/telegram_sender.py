@@ -33,15 +33,11 @@ class EnhancedTelegramSender(BaseTool):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # Default bot (English/fallback)
-        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
         # Language-specific bots configuration
         self.bots = {
             "english": {
-                "token": os.getenv("TELEGRAM_BOT_TOKEN_ENGLISH") or self.bot_token,
-                "chat_id": os.getenv("TELEGRAM_CHAT_ID_ENGLISH") or self.chat_id
+                "token": os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN_ENGLISH"),
+                "chat_id": os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID_ENGLISH")
             },
             "arabic": {
                 "token": os.getenv("TELEGRAM_BOT_TOKEN_ARABIC"),
@@ -60,6 +56,10 @@ class EnhancedTelegramSender(BaseTool):
                 "chat_id": os.getenv("TELEGRAM_CHAT_ID_GERMAN")
             }
         }
+
+        # Initialize with English bot for validation
+        self.bot_token = self.bots["english"]["token"]
+        self.chat_id = self.bots["english"]["chat_id"]
 
         if not self.bot_token or not self.chat_id:
             raise ValueError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
@@ -83,36 +83,30 @@ class EnhancedTelegramSender(BaseTool):
             return False
 
     def _set_bot_for_language(self, language: str) -> None:
-        """Switch to language-specific bot if configured"""
+        """Switch to language-specific bot - REQUIRED for each language"""
         language_lower = language.lower()
 
-        logger.info(f"🔧 Attempting to switch bot for language: '{language}' (normalized: '{language_lower}')")
+        logger.info(f"🔧 Setting bot for language: '{language_lower}'")
 
-        # Check if language-specific bot is configured
+        # Get language-specific bot configuration
         bot_config = self.bots.get(language_lower)
 
-        logger.info(f"🔍 Bot config found for {language_lower}: {bool(bot_config)}")
-        if bot_config:
-            logger.info(f"   Token exists: {bool(bot_config.get('token'))}")
-            logger.info(f"   Chat ID exists: {bool(bot_config.get('chat_id'))}")
-            if bot_config.get('token'):
-                logger.info(f"   Token preview: {bot_config['token'][:15]}...")
-            if bot_config.get('chat_id'):
-                logger.info(f"   Chat ID: {bot_config['chat_id']}")
+        if not bot_config:
+            raise ValueError(f"No bot configuration found for language: {language_lower}")
 
-        if bot_config and bot_config.get('token') and bot_config.get('chat_id'):
-            # Switch to language-specific bot
-            self.bot_token = bot_config['token']
-            self.chat_id = bot_config['chat_id']
-            self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
-            logger.info(f"✅ Successfully switched to {language} bot (chat_id: {self.chat_id})")
-        else:
-            # Use default bot
-            logger.warning(f"⚠️ No bot configured for {language}, using default English bot (chat_id: {self.chat_id})")
+        if not bot_config.get('token') or not bot_config.get('chat_id'):
+            raise ValueError(f"Missing token or chat_id for {language_lower} bot")
+
+        # Switch to language-specific bot
+        self.bot_token = bot_config['token']
+        self.chat_id = bot_config['chat_id']
+        self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+
+        logger.info(f"✅ Switched to {language_lower.upper()} bot (chat_id: {self.chat_id})")
 
     def _run(self, content: str, language: str = "english") -> str:
         try:
-            # Switch to language-specific bot if configured
+            # ALWAYS set the bot for the specified language - no defaults
             self._set_bot_for_language(language)
 
             # Check if content has embedded Telegram image data from search
@@ -1530,9 +1524,19 @@ Return ONLY the translated description, nothing else."""
                 # Remove format markers
                 full_summary = full_summary.replace("=== TELEGRAM_TWO_MESSAGE_FORMAT ===", "")
                 full_summary = full_summary.replace("---TELEGRAM_IMAGE_DATA---", "")
-                # Remove "Message 1" and "Message 2" headers if they appear in content
+                full_summary = full_summary.replace("TELEGRAMTWOMESSAGEFORMAT", "")
+                # Remove "Message 1" and "Message 2" headers and lines containing only ===
                 lines = full_summary.split('\n')
-                cleaned_lines = [line for line in lines if not line.strip().startswith("Message 1") and not line.strip().startswith("Message 2")]
+                cleaned_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    # Skip format marker lines, message headers, and lines with only ===
+                    if (stripped.startswith("Message 1") or
+                        stripped.startswith("Message 2") or
+                        stripped == "===" or
+                        "TELEGRAM" in stripped):
+                        continue
+                    cleaned_lines.append(line)
                 full_summary = '\n'.join(cleaned_lines).strip()
                 logger.info(f"✅ Cleaned format markers: {len(full_summary)} chars")
 

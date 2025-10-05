@@ -97,17 +97,23 @@ class TranslatorTool(BaseTool):
             logger.info(f"📝 Extracted Message 1: {len(message1_text)} chars")
             logger.info(f"📝 Extracted Message 2: {len(message2_text)} chars")
 
+            # Validate extraction
+            if not message2_text:
+                logger.error(f"❌ Message 2 extraction failed for {target_language}!")
+                return f"Translation error: Could not extract Message 2 content"
+
             # Translate each message
             logger.info(f"🔄 Translating Message 1...")
-            translated_message1 = self._translate_text(message1_text, target_language)
+            translated_message1 = self._translate_text(message1_text, target_language) if message1_text else ""
 
             logger.info(f"🔄 Translating Message 2...")
             translated_message2 = self._translate_text(message2_text, target_language)
 
-            # Reconstruct in same format
+            # Reconstruct in same format - ALWAYS include format markers
             translated_content = "=== TELEGRAM_TWO_MESSAGE_FORMAT ===\n"
             translated_content += f"Message 1 (Image Caption):\n{translated_message1}\n\n"
             translated_content += f"Message 2 (Full Summary):\n{translated_message2}\n"
+            translated_content += "\n---TELEGRAM_IMAGE_DATA---\n"
 
             logger.info(f"✅ Translation to {target_language} completed")
             return translated_content
