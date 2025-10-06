@@ -18,21 +18,25 @@ logging.basicConfig(
 )
 
 print("="*80)
-print("IMAGE FINDER TEST SCRIPT - SINGLE URL TEST")
+print("IMAGE FINDER TEST - AD BLOCKER + CSS INJECTION TEST")
 print("="*80)
 print()
 
-# Create a test search results file with just the Yahoo Finance URL
-test_url = "https://finance.yahoo.com/news/live/dow-sp-500-nasdaq-notch-records-on-ai-buzz-even-as-government-shutdown-drags-on-200207403.html"
+# Test with CNBC URL (known to have popups)
+test_url = "https://www.cnbc.com/2025/10/05/stock-market-today-live-updates.html"
 
-print(f"🎯 Testing with single URL:")
+print(f"🎯 Testing popup blocking with CNBC URL:")
 print(f"   {test_url}")
+print()
+print("Defense mechanisms:")
+print("  1. Ad blocker - blocks 21+ ad network domains")
+print("  2. CSS injection - hides modal/popup/overlay elements")
 print()
 
 # Create temporary search results structure
 test_search_results = {
     "metadata": {
-        "timestamp": "2025-10-03 02:30:00 UTC",
+        "timestamp": "2025-10-07 00:00:00 UTC",
         "query": "US stock market financial news",
         "total_articles": 1,
         "search_window_hours": 1.0
@@ -40,10 +44,10 @@ test_search_results = {
     "articles": [
         {
             "article_number": 1,
-            "title": "Dow, S&P 500, Nasdaq notch records on AI buzz",
-            "source": "Yahoo Finance",
+            "title": "Stock market today: Live updates",
+            "source": "CNBC",
             "url": test_url,
-            "date": "October 03, 2025",
+            "date": "October 07, 2025",
             "key_points": ["Stock market activity"]
         }
     ]
@@ -52,17 +56,17 @@ test_search_results = {
 # Save temporary search results file
 test_results_dir = project_root / "output" / "search_results"
 test_results_dir.mkdir(parents=True, exist_ok=True)
-test_results_file = test_results_dir / "test_single_url.json"
+test_results_file = test_results_dir / "test_popup_blocking.json"
 
 with open(test_results_file, 'w', encoding='utf-8') as f:
     json.dump(test_search_results, f, indent=2)
 
-print(f"📁 Created temporary search results file:")
+print(f"📁 Temporary search results file:")
 print(f"   {test_results_file.name}")
 print()
 
 # Search content
-search_content = "S&P 500 Dow Jones Nasdaq stock market records AI technology"
+search_content = "Russell 2000 S&P 500 Dow Jones Nasdaq stock market today"
 
 print(f"🔍 Search content:")
 print(f"   {search_content}")
@@ -71,16 +75,20 @@ print()
 # Initialize Image Finder
 image_finder = EnhancedImageFinder()
 
-# Run image extraction with verbose output
+# Run image extraction
 print("="*80)
 print("RUNNING IMAGE FINDER")
 print("="*80)
+print()
+print("Watch for these log messages:")
+print("  - '🚫 Injecting CSS to hide popups...'")
+print("  - '✅ CSS injection complete'")
 print()
 
 try:
     result = image_finder._run(
         search_content=search_content,
-        mentioned_stocks=[],
+        mentioned_stocks=["RUT", "SPX", "DJI", "IXIC"],
         max_images=1,
         search_results_file=str(test_results_file)
     )
@@ -95,35 +103,51 @@ try:
     images = json.loads(result) if isinstance(result, str) else result
 
     if images:
-        print(f"✅ SUCCESS: Found {len(images)} image(s)")
+        print(f"✅ SUCCESS: Captured {len(images)} screenshot(s)")
         print()
         for idx, img in enumerate(images, 1):
-            print(f"📸 Image {idx}:")
-            print(f"   Local Path: {img.get('url', 'N/A')}")
+            img_path = img.get('url', '')
+
+            print(f"📸 Screenshot {idx}:")
             print(f"   Source: {img.get('source', 'N/A')}")
             print(f"   Type: {img.get('type', 'N/A')}")
             print(f"   Method: {img.get('extraction_method', 'N/A')}")
-            print(f"   Description: {img.get('image_description', 'N/A')}")
             print(f"   File Size: {img.get('file_size', 'N/A')} bytes")
             print(f"   Telegram Compatible: {img.get('telegram_compatible', False)}")
             print()
 
-            # Check if file exists
-            img_path = img.get('url', '')
             if img_path and os.path.exists(img_path):
-                print(f"   ✅ File exists on disk")
+                print(f"   ✅ File saved successfully")
+                print()
+                print(f"   📂 SCREENSHOT PATH:")
+                print(f"   {img_path}")
+                print()
+                print(f"   ⚠️  MANUAL VERIFICATION REQUIRED:")
+                print(f"   1. Open the image file above")
+                print(f"   2. Check if ANY popups/ads are visible")
+                print(f"   3. Verify the chart is clean and unobstructed")
+                print()
+                print(f"   Expected: Clear chart with NO CNBC AI Summit popup")
             else:
-                print(f"   ❌ File NOT found on disk")
+                print(f"   ❌ File NOT found at path")
             print()
+
+        # Show AI description if available
+        description = images[0].get('image_description', '')
+        if description:
+            print(f"🤖 AI Description (first 200 chars):")
+            print(f"   {description[:200]}...")
+            print()
+
     else:
-        print("❌ FAILED: No images found")
+        print("❌ FAILED: No screenshots captured")
         print()
-        print("Possible reasons:")
-        print("   - All URLs timed out during page load")
-        print("   - No chart elements found on pages")
-        print("   - All screenshots failed to capture")
+        print("Common reasons:")
+        print("   - Page load timeout (>20 seconds)")
+        print("   - No chart elements found")
+        print("   - Network issues")
         print()
-        print("Check the logs above for detailed error messages")
+        print("Check the detailed logs above for error messages")
 
 except Exception as e:
     print()
@@ -131,10 +155,18 @@ except Exception as e:
     print("TEST FAILED WITH EXCEPTION")
     print("="*80)
     print(f"❌ Error: {e}")
+    print()
     import traceback
     traceback.print_exc()
 
 print()
 print("="*80)
-print("Test complete!")
+print("TEST COMPLETE")
+print("="*80)
+print()
+print("Next steps:")
+print("  1. Locate the screenshot path shown above")
+print("  2. Open the image in your file explorer")
+print("  3. Verify NO popups are covering the chart")
+print("  4. If popups still appear, report back for alternative solutions")
 print("="*80)

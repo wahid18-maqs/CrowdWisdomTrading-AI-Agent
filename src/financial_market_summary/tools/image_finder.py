@@ -238,6 +238,45 @@ class EnhancedImageFinder(BaseTool):
                 except Exception as e:
                     logger.warning(f"⚠️ Scroll failed: {e}")
 
+                # Hide all overlays, modals, and popups with CSS injection
+                try:
+                    logger.info(f"🚫 Injecting CSS to hide popups and overlays...")
+                    page.add_style_tag(content="""
+                        /* Hide dialogs and modals - EXCLUDE chart-related elements */
+                        [role="dialog"]:not([class*="chart"]):not([id*="chart"]),
+                        [class*="dialog"]:not([class*="chart"]):not([id*="chart"]),
+                        [class*="Dialog"]:not([class*="chart"]):not([id*="chart"]),
+                        [id*="dialog"]:not([class*="chart"]),
+
+                        /* Hide modal backdrops and overlays that are children of body */
+                        body > [class*="backdrop"],
+                        body > [class*="Backdrop"],
+                        body > [class*="overlay"]:not([class*="chart"]):not([id*="chart"]),
+                        body > [class*="Overlay"]:not([class*="chart"]):not([id*="chart"]),
+
+                        /* Hide specific high z-index overlays */
+                        div[style*="z-index: 9999"],
+                        div[style*="z-index: 999999"],
+                        div[style*="z-index: 10000"],
+
+                        /* Hide lightboxes */
+                        [class*="lightbox"],
+                        [class*="Lightbox"] {
+                            display: none !important;
+                            visibility: hidden !important;
+                            opacity: 0 !important;
+                            pointer-events: none !important;
+                        }
+
+                        /* Ensure body is scrollable (some modals disable scroll) */
+                        body {
+                            overflow: visible !important;
+                        }
+                    """)
+                    logger.info(f"✅ CSS injection complete - popups should be hidden")
+                except Exception as e:
+                    logger.warning(f"⚠️ CSS injection failed (non-critical): {e}")
+
                 # Wait significantly longer for charts to fully render (live market data)
                 logger.info(f"⏳ Waiting 15 seconds for live market charts to fully render...")
                 page.wait_for_timeout(15000)  # Increased from 8s to 15s for live data
