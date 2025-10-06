@@ -1,14 +1,20 @@
 import os
 import logging
-from typing import Optional
+from typing import Optional, Type
 from crewai.tools import BaseTool
-from pydantic import Field
+from pydantic import BaseModel, Field
 import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class TranslatorInput(BaseModel):
+    """Input schema for financial translator tool"""
+    content: str = Field(..., description="The English financial content to translate")
+    target_language: str = Field(..., description="Target language: 'arabic', 'hindi', 'hebrew', or 'german'")
 
 
 class TranslatorTool(BaseTool):
@@ -25,6 +31,8 @@ class TranslatorTool(BaseTool):
     Input: English content in two-message format
     Language: 'arabic', 'hindi', 'hebrew', or 'german'
     Output: Translated content maintaining exact same structure"""
+
+    args_schema: Type[BaseModel] = TranslatorInput
 
     api_key: Optional[str] = Field(default=None)
     model: Optional[any] = None
