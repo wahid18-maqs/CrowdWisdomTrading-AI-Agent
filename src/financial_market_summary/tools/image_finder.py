@@ -74,10 +74,10 @@ class EnhancedImageFinder(BaseTool):
                 logger.warning("⚠️ No screenshots were captured from any URLs")
                 return json.dumps([], indent=2)
 
-            # Generate AI descriptions for screenshots
-            logger.info(f"🤖 Generating AI descriptions for {len(extracted_images)} images...")
+            # Extract descriptions from article URLs (web scraping, NO AI)
+            logger.info(f"📄 Extracting descriptions from article URLs for {len(extracted_images)} images...")
             extracted_images = self._generate_ai_descriptions(extracted_images, search_content)
-            logger.info(f"✅ AI descriptions generated")
+            logger.info(f"✅ Descriptions extracted from URLs")
 
             # Save and return
             logger.info(f"💾 Saving {len(extracted_images)} image results...")
@@ -391,7 +391,7 @@ class EnhancedImageFinder(BaseTool):
                                 'trusted_source': True,
                                 'extraction_method': f'screenshot_{selector}',
                                 'source_article': article_url,
-                                'image_description': '',  # Will be filled by AI
+                                'image_description': '',  # Will be filled later using Crawl4AI
                                 'content_type': 'image/png',
                                 'file_size': str(len(screenshot_bytes)),
                             }
@@ -421,174 +421,468 @@ class EnhancedImageFinder(BaseTool):
             return None
 
     def _generate_ai_descriptions(self, extracted_images: List[Dict[str, Any]], search_content: str) -> List[Dict[str, Any]]:
-        """Generate AI descriptions for screenshots using Gemini Vision API"""
+        """Extract descriptions using Crawl4AI + AI selection"""
+        try:
+            logger.info(f"📄 Extracting descriptions using Crawl4AI for {len(extracted_images)} images")
+
+            for img in extracted_images:
+                try:
+                    source_article = img.get('source_article', '')
+                    if not source_article:
+                        logger.error(f"❌ No source article URL - skipping")
+                        img['image_description'] = ''
+                        continue
+
+                    logger.info(f"🌐 Crawling article: {source_article[:80]}...")
+
+                    # Use Crawl4AI to extract article text
+                    article_text = self._crawl_article_with_crawl4ai(source_article)
+
+                    if not article_text:
+                        logger.error(f"❌ Crawl4AI could not extract text")
+                        img['image_description'] = ''
+                        continue
+
+                    logger.info(f"📝 Crawl4AI extracted {len(article_text)} characters")
+
+                    # Use AI to extract chart-related description from the full article text
+                    image_path = img.get('url', '')
+                    if image_path and os.path.exists(image_path):
+                        logger.info(f"   🤖 Using AI to find chart-related description...")
+                        description = self._ai_extract_chart_description(image_path, article_text)
+
+                        if description:
+                            img['image_description'] = description
+                            logger.info(f"✅ AI extracted description: {description[:100]}...")
+                        else:
+                            logger.error(f"❌ AI could not extract chart description")
+                            img['image_description'] = ''
+                    else:
+                        logger.error(f"❌ Image file not found")
+                        img['image_description'] = ''
+
+                    # Small delay to avoid rate limits
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    logger.error(f"❌ Description extraction failed: {e}")
+                    img['image_description'] = ''
+                    continue
+
+            return extracted_images
+
+        except Exception as e:
+            logger.error(f"❌ Description extraction system failed: {e}")
+            return extracted_images
+
+    def _crawl_article_with_crawl4ai(self, article_url: str) -> str:
+        """
+        Use Crawl4AI to extract article text from URL.
+        Crawl4AI handles JavaScript-rendered content automatically.
+        """
+        try:
+            import asyncio
+            from crawl4ai import AsyncWebCrawler
+
+            logger.info(f"   🕷️ Crawl4AI crawling URL...")
+
+            # Define async function to crawl
+            async def crawl():
+                async with AsyncWebCrawler(verbose=False) as crawler:
+                    result = await crawler.arun(url=article_url)
+                    return result
+
+            # Run async function
+            result = asyncio.run(crawl())
+
+            if result.success:
+                # Get ALL content - try markdown first, then fallback
+                article_text = ""
+
+                if hasattr(result, 'markdown') and result.markdown:
+                    article_text = result.markdown
+                elif hasattr(result, 'cleaned_html') and result.cleaned_html:
+                    article_text = result.cleaned_html
+                elif hasattr(result, 'html') and result.html:
+                    article_text = result.html
+
+                logger.info(f"   ✅ Crawl4AI success: {len(article_text)} chars")
+                logger.info(f"   📄 Preview (first 500 chars): {article_text[:500]}")
+                return article_text
+            else:
+                error_msg = result.error_message if hasattr(result, 'error_message') else 'Unknown error'
+                logger.error(f"   ❌ Crawl4AI failed: {error_msg}")
+                return ""
+
+        except Exception as e:
+            logger.error(f"   ❌ Crawl4AI exception: {e}")
+            return ""
+
+    def _ai_extract_chart_description(self, image_path: str, article_text: str) -> str:
+        """
+        Use AI to look at the chart image and full article text, then extract
+        the specific sentence(s) from the article that describe this chart.
+        AI selects existing text, does not generate new content.
+        """
         try:
             import google.generativeai as genai
             from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
             google_api_key = os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
-                logger.error("❌ GOOGLE_API_KEY not found in environment")
-                return extracted_images
+                logger.error("   ❌ GOOGLE_API_KEY not found")
+                return ""
 
             # Configure Gemini
             genai.configure(api_key=google_api_key)
-
-            # Use Gemini 2.5 Flash with vision
-            logger.info(f"   🤖 Initializing Gemini 2.5 Flash for vision analysis...")
             model = genai.GenerativeModel(
-                'gemini-2.0-flash-exp',  # Gemini 2.5 Flash with vision support
+                'gemini-2.0-flash-exp',
                 generation_config={
-                    'temperature': 0.4,
+                    'temperature': 0.3,
                     'top_p': 0.95,
                     'top_k': 40,
-                    'max_output_tokens': 200,
+                    'max_output_tokens': 150,
                 }
             )
-            logger.info(f"   ✅ Model initialized: gemini-2.0-flash-exp")
 
-            logger.info(f"🤖 Generating AI descriptions for {len(extracted_images)} images")
+            # Load image
+            pil_image = Image.open(image_path)
+            if pil_image.mode in ('RGBA', 'LA', 'P'):
+                rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
+                if pil_image.mode == 'P':
+                    pil_image = pil_image.convert('RGBA')
+                rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
+                pil_image = rgb_image
 
-            for img in extracted_images:
-                try:
-                    image_path = img.get('url', '')
-                    if not image_path or not os.path.exists(image_path):
-                        logger.warning(f"⚠️ Image file not found: {image_path}")
-                        img['image_description'] = 'Financial chart'
-                        continue
+            # Clean and prepare article text
+            # Remove extra whitespace and split into lines
+            lines = [line.strip() for line in article_text.split('\n') if line.strip()]
+            # Filter out navigation/menu items (very short lines)
+            content_lines = [line for line in lines if len(line) > 40]
+            # Join back and take first 4000 chars
+            clean_text = '\n'.join(content_lines)[:4000]
 
-                    logger.info(f"📸 Analyzing: {image_path}")
+            logger.info(f"   📄 Article preview (first 300 chars): {clean_text[:300]}")
 
-                    # Load image using PIL
-                    pil_image = Image.open(image_path)
+            # AI prompt - more flexible and forgiving
+            extraction_prompt = f"""You are analyzing a financial chart and an article about stock markets.
 
-                    # Convert to RGB if needed
-                    if pil_image.mode in ('RGBA', 'LA', 'P'):
-                        rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
-                        if pil_image.mode == 'P':
-                            pil_image = pil_image.convert('RGBA')
-                        rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
-                        pil_image = rgb_image
+Look at this chart image and find ANY sentence from the article below that talks about the same financial topic.
 
-                    # Create analysis prompt
-                    analysis_prompt = f"""You are a financial news analyst. Analyze this chart image and write a concise 1-2 sentence description.
+ARTICLE TEXT:
+{clean_text}
 
-Context: {search_content[:300]}
+INSTRUCTIONS:
+1. Look at the chart - what is it showing? (S&P 500, Dow Jones, Nasdaq, a specific stock, market indices, etc.)
+2. Find ANY sentence in the article that mentions this same topic
+3. If the chart shows market indices, look for sentences about market performance, indices, or trading
+4. Return the EXACT text from the article (1-2 sentences)
+5. Do NOT make up text - only return text that exists in the article
+6. If you cannot find ANY matching sentence, return "NONE"
 
-Requirements:
-1. Identify what financial instrument or market is shown (stock, index, commodity, etc.)
-2. Describe the trend or movement visible in the chart
-3. Include specific numbers if clearly visible (prices, percentages, values)
-4. Use past tense verbs (climbed, rose, fell, dropped, gained, declined)
-5. Write in professional news style
-6. Keep it to 1-2 sentences maximum
+Extract the matching sentence(s):"""
 
-Examples:
-- "S&P 500 index climbed 1.8% to 4,567 points showing strong market momentum."
-- "Tesla stock fell 3.2% to $245.80 amid profit-taking after recent rally."
-- "U.S. Treasury 10-year yields rose to 4.28% as investors assessed inflation data."
+            response = model.generate_content(
+                [extraction_prompt, pil_image],
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
 
-Write ONLY the description, no additional text."""
+            if response and response.text:
+                extracted_text = response.text.strip()
 
-                    # Generate description with image
-                    logger.info(f"   🤖 Sending to Gemini Vision API...")
-                    try:
-                        response = model.generate_content(
-                            [analysis_prompt, pil_image],
-                            safety_settings={
-                                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                            }
-                        )
-                        logger.info(f"   ✅ Got response from Gemini Vision")
-                    except Exception as api_error:
-                        logger.error(f"   ❌ Gemini API call failed: {api_error}")
-                        img['image_description'] = 'Financial market chart'
-                        continue
+                # Check if AI found something
+                if extracted_text and extracted_text != "NONE" and len(extracted_text) > 30:
+                    # Clean up the response
+                    extracted_text = re.sub(r'^["\']+|["\']+$', '', extracted_text)
 
-                    # Extract description
-                    if response and response.text:
-                        raw_description = response.text.strip()
-                        logger.info(f"   📝 Raw response: {raw_description[:100]}...")
+                    # Limit to 2 sentences
+                    sentences = [s.strip() for s in re.split(r'[.!?]+', extracted_text) if s.strip()]
+                    description = '. '.join(sentences[:2])
+                    if not description.endswith('.'):
+                        description += '.'
 
-                        # Clean up description
-                        description = re.sub(r'^["\']+|["\']+$', '', raw_description)  # Remove quotes
-                        description = re.sub(r'\s+', ' ', description)  # Normalize spaces
+                    # Limit length
+                    if len(description) > 300:
+                        description = description[:297] + '...'
 
-                        # Limit to 2 sentences
-                        sentences = [s.strip() for s in re.split(r'[.!?]+', description) if s.strip()]
-                        if len(sentences) > 2:
-                            description = '. '.join(sentences[:2]) + '.'
-                        elif sentences:
-                            description = '. '.join(sentences)
-                            if not description.endswith('.'):
-                                description += '.'
+                    logger.info(f"   ✅ AI found relevant text from article")
+                    return description
+                else:
+                    logger.warning(f"   ⚠️ AI response: {extracted_text}")
+                    return ""
+            else:
+                logger.warning(f"   ⚠️ Empty AI response")
+                return ""
 
-                        # Truncate if too long
+        except Exception as e:
+            logger.error(f"   ❌ AI extraction failed: {e}")
+            return ""
+
+    def _verify_description_matches_image(self, image_path: str, description: str) -> bool:
+        """
+        Use AI to verify that the description actually matches what's shown in the chart image.
+        Returns True if description is related to the image, False otherwise.
+        """
+        try:
+            import google.generativeai as genai
+            from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                logger.warning("   ⚠️ GOOGLE_API_KEY not found - skipping verification")
+                return True  # If no API key, accept the description
+
+            # Configure Gemini
+            genai.configure(api_key=google_api_key)
+            model = genai.GenerativeModel(
+                'gemini-2.0-flash-exp',
+                generation_config={
+                    'temperature': 0.2,
+                    'top_p': 0.95,
+                    'top_k': 40,
+                    'max_output_tokens': 50,
+                }
+            )
+
+            # Load image
+            pil_image = Image.open(image_path)
+            if pil_image.mode in ('RGBA', 'LA', 'P'):
+                rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
+                if pil_image.mode == 'P':
+                    pil_image = pil_image.convert('RGBA')
+                rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
+                pil_image = rgb_image
+
+            # Verification prompt
+            verification_prompt = f"""Look at this financial chart image and this description:
+
+DESCRIPTION: "{description}"
+
+QUESTION: Does this description accurately describe what is shown in this chart image?
+
+Consider:
+- Does it mention the correct financial instrument/index shown in the chart?
+- Does it describe data/movement that could be from this chart?
+- Is it talking about the same subject as the chart?
+
+Answer ONLY "YES" or "NO"."""
+
+            response = model.generate_content(
+                [verification_prompt, pil_image],
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
+
+            if response and response.text:
+                answer = response.text.strip().upper()
+                logger.info(f"   🤖 AI verification: {answer}")
+                return "YES" in answer
+            else:
+                logger.warning(f"   ⚠️ Empty AI response, accepting description")
+                return True
+
+        except Exception as e:
+            logger.error(f"   ❌ AI verification failed: {e}")
+            return True  # If verification fails, accept the description
+
+    def _extract_description_from_text(self, article_text: str, search_content: str) -> str:
+        """
+        Extract relevant description from article text.
+        Simply finds first paragraph with financial keywords and returns 1-2 sentences.
+        """
+        try:
+            logger.info(f"   📝 Searching for financial content...")
+
+            # Split text into lines
+            lines = article_text.split('\n')
+
+            # Financial keywords to look for
+            financial_keywords = [
+                'stock', 'market', 'index', 'dow', 'nasdaq', 's&p', 'djia',
+                'rose', 'fell', 'gained', 'declined', 'climbed', 'dropped',
+                'surged', 'plunged', 'rallied', 'tumbled',
+                'up', 'down', 'higher', 'lower',
+                'shares', 'trading', 'points', 'percent', '%',
+                'wall street', 'investors', 'treasury', 'yield'
+            ]
+
+            # Words that indicate headings/titles (to skip)
+            heading_indicators = [
+                'live updates', 'breaking', 'watch', 'read more', 'subscribe',
+                'sign up', 'follow', 'share', 'click here', 'menu', 'search'
+            ]
+
+            # Find first substantial line with financial content
+            for line in lines:
+                line = line.strip()
+
+                # Skip short lines or very long lines
+                if len(line) < 80 or len(line) > 500:
+                    continue
+
+                # Skip navigation/menu items (usually short phrases)
+                if line.count(' ') < 8:  # Increased from 5 to 8 to skip short headings
+                    continue
+
+                # Skip if it looks like a heading
+                line_lower = line.lower()
+                if any(indicator in line_lower for indicator in heading_indicators):
+                    continue
+
+                # Skip if ALL CAPS (likely a heading)
+                if line.isupper():
+                    continue
+
+                # Skip if ends with colon (likely a heading)
+                if line.endswith(':'):
+                    continue
+
+                # Must end with proper punctuation (sentences end with . ! ?)
+                if not line.endswith(('.', '!', '?')):
+                    continue
+
+                # Check if contains financial keywords
+                if any(keyword in line_lower for keyword in financial_keywords):
+                    # Check if contains numbers (likely data)
+                    if re.search(r'\d+', line):
+                        logger.info(f"   ✅ Found financial content")
+
+                        # Extract first 1-2 sentences
+                        sentences = [s.strip() for s in re.split(r'[.!?]+', line) if s.strip()]
+                        description = '. '.join(sentences[:2])
+
+                        if not description.endswith('.'):
+                            description += '.'
+
+                        # Limit length
                         if len(description) > 300:
                             description = description[:297] + '...'
 
-                        # Validate description is not too generic
-                        generic_phrases = ['financial market chart', 'chart showing', 'graph displaying', 'unable to', 'cannot determine']
-                        is_generic = any(phrase in description.lower() for phrase in generic_phrases) and len(description) < 50
+                        logger.info(f"   📄 Description: {description[:100]}...")
+                        return description
 
-                        if is_generic:
-                            logger.warning(f"⚠️ Description too generic, retrying with simpler prompt...")
-
-                            # Try again with a simpler, more direct prompt
-                            simple_prompt = f"""Look at this financial chart and describe what you see in 1-2 sentences.
-
-Include:
-- What is being shown (stock/index name and current value if visible)
-- The trend (up/down/stable)
-- Any specific numbers you can read
-
-Example: "S&P 500 index at 6,711.20 points, up 22.74 points, showing upward trend throughout the trading day."
-
-Description:"""
-
-                            retry_response = model.generate_content(
-                                [simple_prompt, pil_image],
-                                safety_settings={
-                                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                                }
-                            )
-
-                            if retry_response and retry_response.text:
-                                description = retry_response.text.strip()
-                                description = re.sub(r'^["\']+|["\']+$', '', description)
-                                description = re.sub(r'\s+', ' ', description)
-                                logger.info(f"   🔄 Retry description: {description[:100]}...")
-
-                        img['image_description'] = description
-                        logger.info(f"✅ Final description: {description}")
-
-                    else:
-                        logger.warning(f"⚠️ Empty response from Gemini")
-                        img['image_description'] = 'Financial market chart'
-
-                    # Small delay to avoid rate limits
-                    time.sleep(0.5)
-
-                except Exception as e:
-                    logger.error(f"❌ AI description generation failed: {e}")
-                    img['image_description'] = 'Financial market chart'
-                    continue
-
-            return extracted_images
+            logger.warning(f"   ⚠️ No financial content found with strict filters")
+            logger.info(f"   📄 Text preview: {article_text[:500]}...")
+            return ""
 
         except Exception as e:
-            logger.error(f"❌ AI description system failed: {e}")
-            # Return images with default descriptions
-            for img in extracted_images:
-                if not img.get('image_description'):
-                    img['image_description'] = 'Financial market chart'
-            return extracted_images
+            logger.error(f"   ❌ Text extraction failed: {e}")
+            return ""
+
+    def _ai_select_best_paragraph(self, paragraphs: List[str], search_content: str) -> str:
+        """
+        Use AI to intelligently select the most relevant paragraph from the article.
+        AI only selects, does not generate - returns actual paragraph text from website.
+        """
+        try:
+            import google.generativeai as genai
+            from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                logger.error("   ❌ GOOGLE_API_KEY not found - cannot use AI selection")
+                return ""
+
+            # Configure Gemini
+            genai.configure(api_key=google_api_key)
+            model = genai.GenerativeModel(
+                'gemini-2.0-flash-exp',
+                generation_config={
+                    'temperature': 0.3,
+                    'top_p': 0.95,
+                    'top_k': 40,
+                    'max_output_tokens': 100,
+                }
+            )
+
+            # Limit to first 10 paragraphs to avoid token limits
+            paragraphs_to_analyze = paragraphs[:10]
+
+            # Create numbered list of paragraphs for AI
+            numbered_paragraphs = []
+            for i, para in enumerate(paragraphs_to_analyze, 1):
+                # Truncate very long paragraphs
+                para_text = para[:400] + "..." if len(para) > 400 else para
+                numbered_paragraphs.append(f"{i}. {para_text}")
+
+            paragraphs_text = "\n\n".join(numbered_paragraphs)
+
+            # AI prompt - asks AI to select paragraph number, not generate text
+            prompt = f"""You are analyzing a financial news article. Select the BEST paragraph that describes the main financial data or market movement.
+
+Search Context: {search_content[:200]}
+
+Available Paragraphs:
+{paragraphs_text}
+
+INSTRUCTIONS:
+- Select the paragraph number (1-{len(paragraphs_to_analyze)}) that best describes financial market data, stock movements, or trading activity
+- Look for paragraphs with specific numbers, prices, percentages, or market trends
+- Prefer paragraphs that mention indices (S&P 500, Dow, Nasdaq) or specific stocks
+- Return ONLY the number (e.g., "3"), nothing else
+
+Your selection:"""
+
+            response = model.generate_content(
+                prompt,
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
+
+            if response and response.text:
+                # Extract paragraph number from AI response
+                selection = response.text.strip()
+                logger.info(f"   🤖 AI selected: {selection}")
+
+                # Parse the number
+                match = re.search(r'\d+', selection)
+                if match:
+                    selected_index = int(match.group(0)) - 1  # Convert to 0-indexed
+                    if 0 <= selected_index < len(paragraphs_to_analyze):
+                        selected_paragraph = paragraphs_to_analyze[selected_index]
+                        logger.info(f"   ✅ Returning paragraph {selected_index + 1}")
+                        return selected_paragraph
+                    else:
+                        logger.warning(f"   ⚠️ AI selected invalid index: {selected_index + 1}")
+                        return ""
+                else:
+                    logger.warning(f"   ⚠️ Could not parse number from AI response: {selection}")
+                    return ""
+            else:
+                logger.warning(f"   ⚠️ Empty AI response")
+                return ""
+
+        except Exception as e:
+            logger.error(f"   ❌ AI selection failed: {e}")
+            return ""
+
+    def _extract_keywords(self, content: str) -> List[str]:
+        """Extract important keywords from search content"""
+        # Remove common words
+        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                       'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+                       'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
+                       'could', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'}
+
+        # Split content and extract meaningful words
+        words = re.findall(r'\b[A-Za-z]{3,}\b', content)
+        keywords = [w for w in words if w.lower() not in common_words]
+
+        # Return unique keywords, limited to first 10
+        return list(dict.fromkeys(keywords))[:10]
 
     def _save_image_results(self, extracted_images: List[Dict[str, Any]], search_content: str) -> str:
         """Save scraped image details to output/image_results directory"""

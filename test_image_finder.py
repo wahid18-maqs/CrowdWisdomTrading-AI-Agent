@@ -22,21 +22,17 @@ print("IMAGE FINDER TEST - AD BLOCKER + CSS INJECTION TEST")
 print("="*80)
 print()
 
-# Test with CNBC URL (known to have popups)
-test_url = "https://www.cnbc.com/2025/10/05/stock-market-today-live-updates.html"
+# Use latest CNBC URL
+test_url = "https://www.cnbc.com/2025/10/09/stock-market-today-live-updates.html"
 
-print(f"🎯 Testing popup blocking with CNBC URL:")
+print(f"🎯 Testing with CNBC URL:")
 print(f"   {test_url}")
-print()
-print("Defense mechanisms:")
-print("  1. Ad blocker - blocks 21+ ad network domains")
-print("  2. CSS injection - hides modal/popup/overlay elements")
 print()
 
 # Create temporary search results structure
 test_search_results = {
     "metadata": {
-        "timestamp": "2025-10-07 00:00:00 UTC",
+        "timestamp": "2025-10-10 00:00:00 UTC",
         "query": "US stock market financial news",
         "total_articles": 1,
         "search_window_hours": 1.0
@@ -47,7 +43,7 @@ test_search_results = {
             "title": "Stock market today: Live updates",
             "source": "CNBC",
             "url": test_url,
-            "date": "October 07, 2025",
+            "date": "October 09, 2025",
             "key_points": ["Stock market activity"]
         }
     ]
@@ -56,13 +52,12 @@ test_search_results = {
 # Save temporary search results file
 test_results_dir = project_root / "output" / "search_results"
 test_results_dir.mkdir(parents=True, exist_ok=True)
-test_results_file = test_results_dir / "test_popup_blocking.json"
+test_results_file = test_results_dir / "test_cnbc_latest.json"
 
 with open(test_results_file, 'w', encoding='utf-8') as f:
     json.dump(test_search_results, f, indent=2)
 
-print(f"📁 Temporary search results file:")
-print(f"   {test_results_file.name}")
+print(f"📁 Created test search results file")
 print()
 
 # Search content

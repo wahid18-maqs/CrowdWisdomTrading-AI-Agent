@@ -18,8 +18,8 @@ class FinancialTasks:
             sources.
 
             STRICT REQUIREMENTS:
-            1. ONLY articles published in the last 60-90 minutes
-            2. Focus on BREAKING NEWS, LIVE UPDATES, or TODAY's market activity
+            1. ONLY articles published in the last 60 minutes
+            2. Focus on BREAKING NEWS, LIVE UPDATES, or TODAY's top market movers/activity which has the most impact
             3. Target sources: Yahoo Finance, MarketWatch, Investing.com, Benzinga, CNBC
             4. Look for: Live market updates, breaking earnings, Fed announcements, major stock moves
 
@@ -35,8 +35,25 @@ class FinancialTasks:
         
         # Task 2: Create Structured Summary
         summary_task = Task(
-            description=f"Create a financial summary from this news data. Include a title, 3 key points, and 2 market implications. Keep it under 200 words.",
-            expected_output="A structured financial summary with title, key points, and market implications.",
+            #description=f"Create a financial summary from this news data. Include a title, 3 key points, and 2 market implications. Keep it under 200 words.",
+            #expected_output="A structured financial summary with title, key points, and market implications.",
+            description = (
+                                "Write a daily financial market summary in the style of 'The Crowd Wisdom's summary'. "
+                                "The summary should be concise, fluent, and professional, following this structure: "
+                                "1) Title (e.g., 'The Crowd Wisdom's summary'), "
+                                "2) Market overview – summarize Dow Jones, S&P 500, and Nasdaq performance, "
+                                "3) Macro news – include 1–2 short items about key background events (start each with 🔍), "
+                                "4) Notable stocks – highlight 2–3 stocks that moved significantly with short explanations (use 🟢🔵🟡 to distinguish them), "
+                                "5) Commodities or FX if relevant, "
+                                "6) Disclaimer – 'The above does not constitute investment advice…'. "
+                                "Keep it factual, engaging, and under 200 words."
+                            ),
+
+            expected_output = (
+                                "A structured daily market summary under 200 words, including a title, market overview, "
+                                "macro news items, notable stock updates, commodities/FX section if relevant, "
+                                "and a closing disclaimer. Use emojis as specified to mark sections."
+                            ),
             agent=self.agents.summary_agent(),
             context=[search_task]
         )
