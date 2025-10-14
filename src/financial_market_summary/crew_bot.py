@@ -1079,21 +1079,30 @@ class FinancialMarketCrew:
             logger.info("🎯 Detected new two-message format, sending directly")
             # New two-message format - send directly
             raw_send_task = Task(
-                description=f"""Send this Telegram-ready content using the new two-message format:
+                description=f"""Send this Telegram-ready content using the new two-message format to the English bot.
 
-                CONTENT TO SEND:
+                CONTENT TO SEND (WITH FORMAT MARKERS):
                 {summary_content}
 
-                INSTRUCTIONS:
-                1. This content is in the new two-message format and ready for Telegram
-                2. The telegram_sender will automatically handle the two-message delivery
-                3. It will send Message 1 (image with caption) if image is available
-                4. It will always send Message 2 (full summary)
-                5. Use telegram_sender tool with language='english'
-                6. Do NOT modify the content format
+                YOUR JOB:
+                Use the telegram_sender tool with these parameters:
+                - content: Pass the ENTIRE content shown above (including === TELEGRAM_TWO_MESSAGE_FORMAT === and ---TELEGRAM_IMAGE_DATA--- markers)
+                - language: "english"
 
-                The telegram_sender will parse this format and deliver appropriately.""",
-                expected_output="Confirmation of successful two-message format delivery to Telegram.",
+                CRITICAL - DO NOT:
+                - Do NOT extract only "Message 1" and "Message 2" text
+                - Do NOT remove the === TELEGRAM_TWO_MESSAGE_FORMAT === marker
+                - Do NOT remove the ---TELEGRAM_IMAGE_DATA--- marker
+                - Do NOT parse or modify the content in ANY way
+
+                CRITICAL - YOU MUST:
+                - Pass the COMPLETE content from above to telegram_sender (with ALL format markers intact)
+                - The content MUST start with === TELEGRAM_TWO_MESSAGE_FORMAT ===
+                - The content MUST end with ---TELEGRAM_IMAGE_DATA---
+                - Set language parameter to "english"
+
+                The telegram_sender tool will parse the format markers and send two separate messages.""",
+                expected_output="Confirmation that telegram_sender was called with complete formatted content including === TELEGRAM_TWO_MESSAGE_FORMAT === and ---TELEGRAM_IMAGE_DATA--- markers.",
                 agent=send_agent
             )
 
@@ -1150,35 +1159,39 @@ class FinancialMarketCrew:
                     ORIGINAL CONTENT:
                     {summary_content}
 
-                    INSTRUCTIONS:
-                    1. Use financial_translator tool with EXACTLY these parameters:
-                       - content: [the full original content including ALL format markers]
-                       - target_language: '{language}'
+                    STEP 1 - TRANSLATE:
+                    Call the financial_translator tool with BOTH required parameters:
+                    {{
+                        "content": "{summary_content[:100]}...[FULL CONTENT HERE]",
+                        "target_language": "{language}"
+                    }}
 
-                    2. The translator tool will return translated content in this EXACT format:
-                       === TELEGRAM_TWO_MESSAGE_FORMAT ===
-                       Message 1 (Image Caption):
-                       [translated caption]
+                    IMPORTANT: You MUST provide BOTH parameters:
+                    - content: The full original content above (including === TELEGRAM_TWO_MESSAGE_FORMAT === and ---TELEGRAM_IMAGE_DATA--- markers)
+                    - target_language: Must be exactly '{language}' (one of: 'arabic', 'hindi', 'hebrew', 'german')
 
-                       Message 2 (Full Summary):
-                       [translated summary]
+                    STEP 2 - SEND:
+                    After translation, the financial_translator will return translated content in this format:
+                    === TELEGRAM_TWO_MESSAGE_FORMAT ===
+                    Message 1 (Image Caption):
+                    [translated caption]
 
-                       ---TELEGRAM_IMAGE_DATA---
+                    Message 2 (Full Summary):
+                    [translated summary]
 
-                    3. After translation, use telegram_sender tool with EXACTLY these parameters:
-                       - content: [THE COMPLETE OUTPUT from financial_translator tool - do NOT modify or extract]
-                       - language: '{language}'
+                    ---TELEGRAM_IMAGE_DATA---
 
-                    4. The telegram_sender will automatically route to the {language.upper()} bot based on the language parameter
-                    5. If an image is available, send Message 1 (image + translated caption) and Message 2 (translated summary)
-                    6. If NO image is available, just send Message 2 (translated summary) - this is perfectly fine
+                    Pass this COMPLETE output to telegram_sender tool:
+                    {{
+                        "content": "[COMPLETE translated output from Step 1]",
+                        "language": "{language}"
+                    }}
 
                     CRITICAL REQUIREMENTS:
-                    - Pass the COMPLETE translator output to telegram_sender (including === and --- markers)
-                    - Do NOT extract or modify the translator output
-                    - Do NOT remove format markers
-                    - The language parameter MUST be '{language}' (lowercase)
-                    - This ensures the message goes to the {language.upper()} bot, NOT the English bot""",
+                    - Both financial_translator parameters (content AND target_language) are REQUIRED
+                    - Do NOT modify the translator output before passing to telegram_sender
+                    - Keep ALL format markers (=== and ---) intact
+                    - The language parameter routes to the {language.upper()} bot""",
                     expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot with both messages (caption and summary).",
                     agent=send_agent
                 )
