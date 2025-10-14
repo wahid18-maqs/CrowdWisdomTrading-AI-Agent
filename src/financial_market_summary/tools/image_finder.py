@@ -435,21 +435,21 @@ class EnhancedImageFinder(BaseTool):
 
                     logger.info(f"🌐 Crawling article: {source_article[:80]}...")
 
-                    # Use Crawl4AI to extract article text
-                    article_text = self._crawl_article_with_crawl4ai(source_article)
+                    # Use Crawl4AI to extract paragraphs from <p> tags
+                    paragraphs = self._crawl_article_with_crawl4ai(source_article)
 
-                    if not article_text:
-                        logger.error(f"❌ Crawl4AI could not extract text")
+                    if not paragraphs:
+                        logger.error(f"❌ Crawl4AI could not extract paragraphs")
                         img['image_description'] = ''
                         continue
 
-                    logger.info(f"📝 Crawl4AI extracted {len(article_text)} characters")
+                    logger.info(f"📝 Crawl4AI extracted {len(paragraphs)} paragraphs")
 
-                    # Use AI to extract chart-related description from the full article text
+                    # Use AI to select which paragraph describes the chart
                     image_path = img.get('url', '')
                     if image_path and os.path.exists(image_path):
-                        logger.info(f"   🤖 Using AI to find chart-related description...")
-                        description = self._ai_extract_chart_description(image_path, article_text)
+                        logger.info(f"   🤖 Using AI to select chart description from <p> tags...")
+                        description = self._ai_extract_chart_description(image_path, paragraphs)
 
                         if description:
                             img['image_description'] = description
@@ -475,10 +475,10 @@ class EnhancedImageFinder(BaseTool):
             logger.error(f"❌ Description extraction system failed: {e}")
             return extracted_images
 
-    def _crawl_article_with_crawl4ai(self, article_url: str) -> str:
+    def _crawl_article_with_crawl4ai(self, article_url: str) -> List[str]:
         """
-        Use Crawl4AI to extract article text from URL.
-        Crawl4AI handles JavaScript-rendered content automatically.
+        Use Crawl4AI to extract article HTML, then parse <p> tags with BeautifulSoup.
+        Returns list of paragraph texts from the article.
         """
         try:
             import asyncio
@@ -496,37 +496,84 @@ class EnhancedImageFinder(BaseTool):
             result = asyncio.run(crawl())
 
             if result.success:
-                # Get ALL content - try markdown first, then fallback
-                article_text = ""
+                # Get HTML content (prefer cleaned_html, fallback to html)
+                html_content = ""
 
-                if hasattr(result, 'markdown') and result.markdown:
-                    article_text = result.markdown
-                elif hasattr(result, 'cleaned_html') and result.cleaned_html:
-                    article_text = result.cleaned_html
+                if hasattr(result, 'cleaned_html') and result.cleaned_html:
+                    html_content = result.cleaned_html
+                    logger.info(f"   ✅ Using cleaned_html")
                 elif hasattr(result, 'html') and result.html:
-                    article_text = result.html
+                    html_content = result.html
+                    logger.info(f"   ✅ Using raw html")
+                else:
+                    logger.error(f"   ❌ No HTML content available")
+                    return []
 
-                logger.info(f"   ✅ Crawl4AI success: {len(article_text)} chars")
-                logger.info(f"   📄 Preview (first 500 chars): {article_text[:500]}")
-                return article_text
+                logger.info(f"   ✅ Crawl4AI success: {len(html_content)} chars")
+
+                # Parse HTML with BeautifulSoup to extract <p> tags
+                soup = BeautifulSoup(html_content, 'html.parser')
+
+                # Extract all <p> tags
+                paragraphs = soup.find_all('p')
+                logger.info(f"   📄 Found {len(paragraphs)} <p> tags")
+
+                # Extract text from <p> tags and filter
+                paragraph_texts = []
+                for p in paragraphs:
+                    text = p.get_text(strip=True)
+
+                    # Filter out short/irrelevant paragraphs
+                    if len(text) < 80:  # Skip short paragraphs
+                        continue
+
+                    if text.count(' ') < 10:  # Skip if not enough words
+                        continue
+
+                    # Must contain financial keywords
+                    text_lower = text.lower()
+                    financial_keywords = [
+                        'stock', 'market', 'index', 'dow', 'nasdaq', 's&p', 'djia',
+                        'rose', 'fell', 'gained', 'declined', 'points', 'percent',
+                        'shares', 'trading', 'investors', 'wall street', 'treasury',
+                        'futures', 'bond', 'yield', 'rally'
+                    ]
+
+                    if any(keyword in text_lower for keyword in financial_keywords):
+                        paragraph_texts.append(text)
+
+                logger.info(f"   ✅ Extracted {len(paragraph_texts)} relevant paragraphs")
+
+                if paragraph_texts:
+                    logger.info(f"   📄 First paragraph preview: {paragraph_texts[0][:150]}...")
+
+                return paragraph_texts
+
             else:
                 error_msg = result.error_message if hasattr(result, 'error_message') else 'Unknown error'
                 logger.error(f"   ❌ Crawl4AI failed: {error_msg}")
-                return ""
+                return []
 
         except Exception as e:
             logger.error(f"   ❌ Crawl4AI exception: {e}")
-            return ""
+            return []
 
-    def _ai_extract_chart_description(self, image_path: str, article_text: str) -> str:
+    def _ai_extract_chart_description(self, image_path: str, paragraphs: List[str]) -> str:
         """
-        Use AI to look at the chart image and full article text, then extract
-        the specific sentence(s) from the article that describe this chart.
-        AI selects existing text, does not generate new content.
+        Use AI to look at the chart image and article paragraphs (from <p> tags),
+        then select which paragraph describes this chart.
+        AI selects existing text from <p> tags, does not generate new content.
         """
         try:
             import google.generativeai as genai
             from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+            # Check if we have paragraphs
+            if not paragraphs or len(paragraphs) == 0:
+                logger.error("   ❌ No paragraphs provided")
+                return ""
+
+            logger.info(f"   📝 Analyzing {len(paragraphs)} paragraphs from <p> tags...")
 
             google_api_key = os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
@@ -541,7 +588,7 @@ class EnhancedImageFinder(BaseTool):
                     'temperature': 0.3,
                     'top_p': 0.95,
                     'top_k': 40,
-                    'max_output_tokens': 150,
+                    'max_output_tokens': 200,
                 }
             )
 
@@ -554,33 +601,34 @@ class EnhancedImageFinder(BaseTool):
                 rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
                 pil_image = rgb_image
 
-            # Clean and prepare article text
-            # Remove extra whitespace and split into lines
-            lines = [line.strip() for line in article_text.split('\n') if line.strip()]
-            # Filter out navigation/menu items (very short lines)
-            content_lines = [line for line in lines if len(line) > 40]
-            # Join back and take first 4000 chars
-            clean_text = '\n'.join(content_lines)[:4000]
+            # Prepare paragraphs for AI - number them
+            paragraphs_to_analyze = paragraphs[:15]  # Limit to first 15 paragraphs
+            numbered_paragraphs = []
+            for i, para in enumerate(paragraphs_to_analyze, 1):
+                # Truncate if too long
+                para_text = para[:300] + "..." if len(para) > 300 else para
+                numbered_paragraphs.append(f"{i}. {para_text}")
 
-            logger.info(f"   📄 Article preview (first 300 chars): {clean_text[:300]}")
+            paragraphs_text = "\n\n".join(numbered_paragraphs)
 
-            # AI prompt - more flexible and forgiving
-            extraction_prompt = f"""You are analyzing a financial chart and an article about stock markets.
+            logger.info(f"   📄 First paragraph: {paragraphs_to_analyze[0][:150]}...")
 
-Look at this chart image and find ANY sentence from the article below that talks about the same financial topic.
+            # AI prompt - asks AI to select paragraph number that describes the chart
+            extraction_prompt = f"""You are analyzing a financial chart image and article paragraphs from the website's <p> tags.
 
-ARTICLE TEXT:
-{clean_text}
+Look at this chart image and select which paragraph from the article describes what's shown in this chart.
+
+ARTICLE PARAGRAPHS (from website <p> tags):
+{paragraphs_text}
 
 INSTRUCTIONS:
 1. Look at the chart - what is it showing? (S&P 500, Dow Jones, Nasdaq, a specific stock, market indices, etc.)
-2. Find ANY sentence in the article that mentions this same topic
-3. If the chart shows market indices, look for sentences about market performance, indices, or trading
-4. Return the EXACT text from the article (1-2 sentences)
-5. Do NOT make up text - only return text that exists in the article
-6. If you cannot find ANY matching sentence, return "NONE"
+2. Find the paragraph number (1-{len(paragraphs_to_analyze)}) that describes this same topic
+3. The paragraph should mention the same financial data, indices, or stocks shown in the chart
+4. Return ONLY the paragraph number (e.g., "3")
+5. If you cannot find ANY matching paragraph, return "NONE"
 
-Extract the matching sentence(s):"""
+Your selection:"""
 
             response = model.generate_content(
                 [extraction_prompt, pil_image],
@@ -593,27 +641,39 @@ Extract the matching sentence(s):"""
             )
 
             if response and response.text:
-                extracted_text = response.text.strip()
+                ai_response = response.text.strip()
+                logger.info(f"   🤖 AI response: {ai_response}")
 
-                # Check if AI found something
-                if extracted_text and extracted_text != "NONE" and len(extracted_text) > 30:
-                    # Clean up the response
-                    extracted_text = re.sub(r'^["\']+|["\']+$', '', extracted_text)
+                # Check if AI said NONE
+                if ai_response == "NONE":
+                    logger.warning(f"   ⚠️ AI could not find matching paragraph")
+                    return ""
 
-                    # Limit to 2 sentences
-                    sentences = [s.strip() for s in re.split(r'[.!?]+', extracted_text) if s.strip()]
-                    description = '. '.join(sentences[:2])
-                    if not description.endswith('.'):
-                        description += '.'
+                # Try to extract paragraph number from AI response
+                match = re.search(r'\d+', ai_response)
+                if match:
+                    paragraph_num = int(match.group(0))
+                    logger.info(f"   ✅ AI selected paragraph #{paragraph_num}")
 
-                    # Limit length
-                    if len(description) > 300:
-                        description = description[:297] + '...'
+                    # Check if paragraph number is valid
+                    if 1 <= paragraph_num <= len(paragraphs_to_analyze):
+                        # Get the complete paragraph text (0-indexed)
+                        selected_paragraph = paragraphs_to_analyze[paragraph_num - 1]
 
-                    logger.info(f"   ✅ AI found relevant text from article")
-                    return description
+                        # Return the complete paragraph from <p> tag
+                        description = selected_paragraph.strip()
+
+                        # Ensure it ends with proper punctuation
+                        if not description.endswith(('.', '!', '?')):
+                            description += '.'
+
+                        logger.info(f"   ✅ Complete paragraph from <p> tag: {description[:150]}...")
+                        return description
+                    else:
+                        logger.warning(f"   ⚠️ AI selected invalid paragraph number: {paragraph_num}")
+                        return ""
                 else:
-                    logger.warning(f"   ⚠️ AI response: {extracted_text}")
+                    logger.warning(f"   ⚠️ Could not extract paragraph number from AI response")
                     return ""
             else:
                 logger.warning(f"   ⚠️ Empty AI response")

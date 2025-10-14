@@ -727,13 +727,55 @@ class FinancialMarketCrew:
                - Explain what the image represents and its relevance to the news
                - End with "Full summary below ⬇️"
 
-            2. Message 2 (Full Summary): Comprehensive analysis (≤400 words, ≤4096 chars)
-               - Professional title (no emojis)
-               - Key Points section (4-6 bullet points)
-               - Market Implications section (3-5 bullet points)
-               - Live Chart reference
+            2. Message 2 (Full Summary): Write a comprehensive market summary (≤250 words)
+               - **TITLE**: Create a dynamic, engaging title based on the day's main market theme
+                 Examples: "Tech Rally Drives Markets Higher" or "Fed Signals Pause as Inflation Cools" or "Markets Hit Record Highs on Strong Earnings"
+               - **Market Overview:** Section with Dow Jones, S&P 500, and Nasdaq performance
+               - **Macro News:** 1–2 short items about key background events (start each with 🔍)
+               - **Notable Stocks:** 2–3 stocks that moved significantly with short explanations (use 🟢🔵🟡 to distinguish them)
+               - **Commodities & FX:** Brief description if relevant
+               - **Live Charts:** Section with market index chart links
+               - **Disclaimer:** "*The above does not constitute investment advice…*"
+               - Keep it factual, engaging, and under 250 words
 
-            OUTPUT FORMAT: Return the new two-message format that the telegram_sender can process""",
+            CRITICAL OUTPUT FORMAT - You MUST return EXACTLY this structure:
+
+            === TELEGRAM_TWO_MESSAGE_FORMAT ===
+
+            Message 1 (Image Caption):
+            [Your short image caption here with emojis]
+
+            Message 2 (Full Summary):
+            **[Your Dynamic Title Here]**
+
+            **Market Overview:**
+            [Paragraph summarizing Dow, S&P, Nasdaq performance with specific numbers/percentages]
+
+            **Macro News:**
+            🔍 [First macro news item]
+            🔍 [Second macro news item]
+
+            **Notable Stocks:**
+            🟢 **[Stock Symbol]** [Description]
+            🔵 **[Stock Symbol]** [Description]
+            🟡 **[Stock Symbol]** [Description]
+
+            **Commodities & FX:**
+            [Brief description if relevant]
+
+            **Live Charts:**
+            🔗 📊 <a href="https://finance.yahoo.com/quote/%5EGSPC/chart/">S&P 500</a>
+            🔗 📈 <a href="https://finance.yahoo.com/quote/%5EIXIC/chart/">NASDAQ</a>
+            🔗 📉 <a href="https://finance.yahoo.com/quote/%5EDJI/chart/">Dow Jones</a>
+            🔗 ⚡ <a href="https://finance.yahoo.com/quote/%5EVIX/chart/">VIX</a>
+            🔗 🏛️ <a href="https://finance.yahoo.com/quote/%5ETNX/chart/">10-Year</a>
+            🔗 💰 <a href="https://finance.yahoo.com/quote/GC%3DF/chart/">Gold</a>
+
+            *The above does not constitute investment advice and is for informational purposes only. Always conduct your own due diligence.*
+
+            ---TELEGRAM_IMAGE_DATA---
+
+            Do NOT add any extra text outside this format. The telegram_sender tool will parse this exact format.""",
             expected_output="Two-message format financial summary ready for Telegram delivery with search results stored in output folder.",
             agent=search_agent
         )
@@ -1109,20 +1151,35 @@ class FinancialMarketCrew:
                     {summary_content}
 
                     INSTRUCTIONS:
-                    1. Use financial_translator tool with target_language='{language}' to translate the content
-                    2. The translator will preserve stock symbols, numbers, HTML tags, and two-message format
+                    1. Use financial_translator tool with EXACTLY these parameters:
+                       - content: [the full original content including ALL format markers]
+                       - target_language: '{language}'
+
+                    2. The translator tool will return translated content in this EXACT format:
+                       === TELEGRAM_TWO_MESSAGE_FORMAT ===
+                       Message 1 (Image Caption):
+                       [translated caption]
+
+                       Message 2 (Full Summary):
+                       [translated summary]
+
+                       ---TELEGRAM_IMAGE_DATA---
+
                     3. After translation, use telegram_sender tool with EXACTLY these parameters:
-                       - content: [the translated content from step 1]
+                       - content: [THE COMPLETE OUTPUT from financial_translator tool - do NOT modify or extract]
                        - language: '{language}'
+
                     4. The telegram_sender will automatically route to the {language.upper()} bot based on the language parameter
                     5. If an image is available, send Message 1 (image + translated caption) and Message 2 (translated summary)
                     6. If NO image is available, just send Message 2 (translated summary) - this is perfectly fine
 
-                    CRITICAL:
+                    CRITICAL REQUIREMENTS:
+                    - Pass the COMPLETE translator output to telegram_sender (including === and --- markers)
+                    - Do NOT extract or modify the translator output
+                    - Do NOT remove format markers
                     - The language parameter MUST be '{language}' (lowercase)
-                    - This ensures the message goes to the {language.upper()} bot, NOT the English bot
-                    - Always proceed with translation and sending, even if image is missing.""",
-                    expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot (with or without image).",
+                    - This ensures the message goes to the {language.upper()} bot, NOT the English bot""",
+                    expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot with both messages (caption and summary).",
                     agent=send_agent
                 )
 

@@ -23,7 +23,7 @@ print("="*80)
 print()
 
 # Use latest CNBC URL
-test_url = "https://www.cnbc.com/2025/10/09/stock-market-today-live-updates.html"
+test_url = "https://www.cnbc.com/2025/10/12/stock-market-today-live-updates.html"
 
 print(f"🎯 Testing with CNBC URL:")
 print(f"   {test_url}")
