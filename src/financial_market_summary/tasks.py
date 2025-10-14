@@ -46,13 +46,20 @@ class FinancialTasks:
                                 "4) Notable stocks – highlight 2–3 stocks that moved significantly with short explanations (use 🟢🔵🟡 to distinguish them), "
                                 "5) Commodities or FX if relevant, "
                                 "6) Disclaimer – 'The above does not constitute investment advice…'. "
-                                "Keep it factual, engaging, and under 200 words."
+                                "Keep it factual, engaging, and under 200 words.\n\n"
+                                "GUARD CLAUSE - PREVENT DUPLICATES:\n"
+                                "- Do NOT repeat the same news item, stock, or event multiple times in the summary\n"
+                                "- Each company/stock should be mentioned only once\n"
+                                "- Each macro news event should appear only once\n"
+                                "- If multiple search results discuss the same event, consolidate into ONE mention\n"
+                                "- Ensure each bullet point or section discusses a DIFFERENT topic"
                             ),
 
             expected_output = (
                                 "A structured daily market summary under 200 words, including a title, market overview, "
                                 "macro news items, notable stock updates, commodities/FX section if relevant, "
-                                "and a closing disclaimer. Use emojis as specified to mark sections."
+                                "and a closing disclaimer. Use emojis as specified to mark sections. "
+                                "Each news item, stock, and event must appear only once with no duplicates."
                             ),
             agent=self.agents.summary_agent(),
             context=[search_task]

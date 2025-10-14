@@ -49,12 +49,12 @@ class FinancialAgents:
         )
             
     def search_agent(self) -> Agent:
-        """Creates an agent for comprehensive financial news searching across all trusted domains."""
+        """Creates an agent for comprehensive financial news searching and image extraction."""
         return Agent(
-            role="Comprehensive Financial News Searcher",
-            goal="Search comprehensively across ALL trusted financial domains for the latest US financial news, ensuring complete market coverage from major outlets, specialized sites, premium sources, and government agencies.",
-            backstory="You are an expert financial researcher specialized in comprehensive multi-domain news aggregation. You systematically search across all major financial news outlets (Yahoo Finance, CNBC, Reuters, Bloomberg), specialized sites (Seeking Alpha, Benzinga), premium sources (WSJ, FT, Barron's), market data providers (NASDAQ, Morningstar), and government sources (SEC, Fed, Treasury) to ensure no critical market news is missed. You validate source diversity and URL accessibility.",
-            tools=[self.tavily_tool],
+            role="Comprehensive Financial News Searcher and Image Extractor",
+            goal="Search comprehensively across ALL trusted financial domains for the latest US financial news and extract relevant financial chart images from article URLs.",
+            backstory="You are an expert financial researcher specialized in comprehensive multi-domain news aggregation and visual content extraction. You systematically search across all major financial news outlets (Yahoo Finance, CNBC, Reuters, Bloomberg), specialized sites (Seeking Alpha, Benzinga), premium sources (WSJ, FT, Barron's), market data providers (NASDAQ, Morningstar), and government sources (SEC, Fed, Treasury) to ensure no critical market news is missed. You also extract financial charts and images from article URLs using screenshot technology and AI-powered description matching.",
+            tools=[self.tavily_tool, self.image_finder],
             llm=self.llm,
             verbose=True
         )

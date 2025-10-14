@@ -704,14 +704,12 @@ class FinancialMarketCrew:
         logger.info("--- Phase 1: Searching for Financial News (Last 24 Hours) ---")
         search_agent = self.agents_factory.search_agent()
         search_task = Task(
-            description="""Search comprehensively for the latest US financial news and create a two-message format summary.
+            description="""Search comprehensively for the latest US financial news, extract chart images, and create a two-message format summary.
 
-            SEARCH AND SUMMARIZE:
+            PHASE 1 - SEARCH:
             - Search across ALL domains for comprehensive financial news coverage (24-hour timeframe)
             - Store search results in output folder for archiving
-            - Create a TWO-MESSAGE FORMAT summary for Telegram delivery
             - Focus on key market movements, earnings, Fed policy, notable stocks
-            - Generate both: short image caption (with emojis) + full comprehensive summary
 
             SEARCH STRATEGY:
             1. Use tavily_financial_search tool with NO domain restrictions
@@ -719,7 +717,23 @@ class FinancialMarketCrew:
             3. Search timeframe: Last 24 hours (not just 1 hour to ensure results)
             4. Gather comprehensive news from all available sources
             5. Store complete results in output folder
-            6. Generate two-message format output
+            6. Note the search_results_file path (will be in output/search_results/ folder)
+
+            PHASE 2 - EXTRACT IMAGES:
+            After completing the search, use the enhanced_financial_image_finder tool:
+            1. Pass the search_content (summary of what you found)
+            2. Pass the search_results_file path from Phase 1
+            3. Set max_images to 1 (we only need one chart image)
+            4. The tool will:
+               - Extract article URLs from the search results file
+               - Capture chart screenshots from ALL article URLs
+               - Use AI to generate matching descriptions from article text
+               - Return the best chart image with description
+
+            PHASE 3 - CREATE TWO-MESSAGE FORMAT SUMMARY:
+            - Create a TWO-MESSAGE FORMAT summary for Telegram delivery
+            - Use the image description from Phase 2 in Message 1
+            - Generate both: short image caption (with emojis) + full comprehensive summary
 
             TWO-MESSAGE FORMAT REQUIREMENTS:
             1. Message 1 (Image Caption): Short, engaging caption with image description (≤150 words, ≤1024 chars)

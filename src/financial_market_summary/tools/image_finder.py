@@ -132,20 +132,18 @@ class EnhancedImageFinder(BaseTool):
         """Extract screenshots from provided article URLs"""
         extracted_images = []
 
-        # Limit attempts to avoid long timeouts
-        max_attempts = min(5, len(article_urls))
+        # Process ALL article URLs (no limit)
+        max_attempts = len(article_urls)
         attempts = 0
         skipped_yahoo = 0
 
         logger.info(f"🔍 Starting screenshot extraction:")
         logger.info(f"   - Total URLs available: {len(article_urls)}")
-        logger.info(f"   - Max attempts: {max_attempts}")
+        logger.info(f"   - Will attempt ALL URLs: {max_attempts}")
         logger.info(f"   - Target images: {max_images}")
 
         for idx, url in enumerate(article_urls, 1):
-            if attempts >= max_attempts:
-                logger.info(f"⚠️ Reached max attempts ({max_attempts}), stopping screenshot extraction")
-                break
+            # No max_attempts check - will process all URLs until target images reached
 
             # Allow Yahoo Finance for chart extraction
             # Yahoo Finance has good charts that we can capture
