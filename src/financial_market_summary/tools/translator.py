@@ -168,8 +168,16 @@ WHAT TO TRANSLATE (convert to {target_language} script):
 WHAT TO KEEP IN ENGLISH (do NOT translate):
 ❌ Stock ticker symbols: AAPL, MSFT, TSLA, GOOGL, etc.
 ❌ Numbers: 1.5%, $100, 5,000, etc.
-❌ HTML tags: <b>, </b>, <a>, </a>, <div>, etc.
+❌ HTML tags: <b>, </b>, <a href="...">, </a>, <div>, etc.
 ❌ URLs: https://... links
+❌ COMPLETE HTML LINK STRUCTURE: <a href="URL">Link Text</a> - The ENTIRE structure must be preserved EXACTLY, including the href attribute
+
+CRITICAL HTML LINK PRESERVATION:
+- You MUST keep the complete HTML link format: <a href="URL">Text</a>
+- NEVER change it to: <a>URL</a>Text
+- NEVER remove the href attribute
+- Example: <a href="https://finance.yahoo.com/quote/%5EGSPC/chart/">S&P 500</a> must stay EXACTLY as-is
+- Only translate the link text between > and </a>, NOT the URL or href attribute
 
 {language_instructions.get(target_language, '')}
 
