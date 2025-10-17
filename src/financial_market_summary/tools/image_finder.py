@@ -528,13 +528,15 @@ class EnhancedImageFinder(BaseTool):
                     if text.count(' ') < 10:  # Skip if not enough words
                         continue
 
-                    # Must contain financial keywords
+                    # Must contain financial keywords (relaxed filter)
                     text_lower = text.lower()
                     financial_keywords = [
                         'stock', 'market', 'index', 'dow', 'nasdaq', 's&p', 'djia',
                         'rose', 'fell', 'gained', 'declined', 'points', 'percent',
                         'shares', 'trading', 'investors', 'wall street', 'treasury',
-                        'futures', 'bond', 'yield', 'rally'
+                        'futures', 'bond', 'yield', 'rally', 'price', 'earnings',
+                        'revenue', 'profit', 'loss', 'up', 'down', 'higher', 'lower',
+                        'popped', 'jumped', 'dropped', 'year', 'quarter', 'friday'
                     ]
 
                     if any(keyword in text_lower for keyword in financial_keywords):
@@ -559,8 +561,10 @@ class EnhancedImageFinder(BaseTool):
     def _ai_extract_chart_description(self, image_path: str, paragraphs: List[str]) -> str:
         """
         Use AI to look at the chart image and article paragraphs (from <p> tags),
-        then select which paragraph describes this chart.
-        AI selects existing text from <p> tags, does not generate new content.
+        then select which paragraph (or 1-2 sentences from it) describes this chart.
+
+        CRITICAL: AI ONLY SELECTS existing text from paragraphs - NO AI-generated content!
+        Returns ACTUAL text from the article, not AI-written descriptions.
         """
         try:
             import google.generativeai as genai
@@ -600,7 +604,8 @@ class EnhancedImageFinder(BaseTool):
                 pil_image = rgb_image
 
             # Prepare paragraphs for AI - number them
-            paragraphs_to_analyze = paragraphs[:15]  # Limit to first 15 paragraphs
+            # Use all paragraphs (Gemini 2.0 can handle more context)
+            paragraphs_to_analyze = paragraphs  # Use ALL paragraphs for better matching
             numbered_paragraphs = []
             for i, para in enumerate(paragraphs_to_analyze, 1):
                 # Truncate if too long
@@ -611,22 +616,104 @@ class EnhancedImageFinder(BaseTool):
 
             logger.info(f"   📄 First paragraph: {paragraphs_to_analyze[0][:150]}...")
 
-            # AI prompt - asks AI to select paragraph number that describes the chart
-            extraction_prompt = f"""You are analyzing a financial chart image and article paragraphs from the website's <p> tags.
+            # STEP 1: First, analyze the chart to understand what it shows
+            logger.info(f"   🔍 Step 1: Analyzing chart image to identify content...")
+            chart_analysis_prompt = """Analyze this financial chart image and describe what it shows.
 
-Look at this chart image and select which paragraph from the article describes what's shown in this chart.
+WHAT TO IDENTIFY:
+1. Which market indices or stocks are shown? (S&P 500, Dow Jones, Nasdaq, Russell 2000, specific stocks, etc.)
+2. What is the chart type? (line chart, candlestick, bar chart, etc.)
+3. What time period? (intraday, daily, weekly, monthly, yearly)
+4. What is the trend? (up, down, sideways, volatile)
+5. Are there any specific price levels or percentages visible?
 
-ARTICLE PARAGRAPHS (from website <p> tags):
+Provide a brief 2-3 sentence analysis of what this chart displays."""
+
+            chart_analysis_response = model.generate_content(
+                [chart_analysis_prompt, pil_image],
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
+
+            chart_understanding = ""
+            if chart_analysis_response and chart_analysis_response.text:
+                chart_understanding = chart_analysis_response.text.strip()
+                logger.info(f"   ✅ Chart analysis: {chart_understanding[:150]}...")
+            else:
+                logger.warning(f"   ⚠️ Could not analyze chart, proceeding without analysis")
+
+            # STEP 2: Pre-filter paragraphs that might mention the stock/company
+            # Extract stock/company names dynamically from chart analysis
+            stock_keywords = []
+
+            # Extract potential stock symbols (2-5 uppercase letters)
+            import re
+            potential_symbols = re.findall(r'\b[A-Z]{2,5}\b', chart_understanding)
+            stock_keywords.extend(potential_symbols)
+
+            # Extract company names (capitalized words, excluding common words)
+            words = chart_understanding.split()
+            common_words = {'The', 'Chart', 'Stock', 'Company', 'Index', 'Line', 'YTD', 'Here', 'Type'}
+            for word in words:
+                # Capitalized word that's not a common word and longer than 2 chars
+                if word and word[0].isupper() and word not in common_words and len(word) > 2:
+                    # Remove punctuation
+                    clean_word = re.sub(r'[^\w]', '', word)
+                    if clean_word and clean_word not in stock_keywords:
+                        stock_keywords.append(clean_word)
+
+            # Also check for known market indices
+            index_keywords = ['S&P', 'Dow', 'Nasdaq', 'Russell', 'DJIA']
+            for idx in index_keywords:
+                if idx.lower() in chart_understanding.lower():
+                    stock_keywords.append(idx)
+
+            if stock_keywords:
+                logger.info(f"   🔍 Pre-filtering for keywords: {stock_keywords}")
+                # Find paragraphs that mention these keywords
+                relevant_indices = []
+                for i, para in enumerate(paragraphs_to_analyze):
+                    if any(keyword.lower() in para.lower() for keyword in stock_keywords):
+                        relevant_indices.append(i)
+
+                if relevant_indices:
+                    logger.info(f"   ✅ Found {len(relevant_indices)} paragraphs mentioning {stock_keywords}")
+                    # Prioritize these paragraphs - put them first
+                    prioritized_paragraphs = [paragraphs_to_analyze[i] for i in relevant_indices]
+                    other_paragraphs = [p for i, p in enumerate(paragraphs_to_analyze) if i not in relevant_indices]
+                    paragraphs_to_analyze = prioritized_paragraphs + other_paragraphs[:10]  # Keep some others too
+                    logger.info(f"   📝 Using {len(prioritized_paragraphs)} relevant + {min(10, len(other_paragraphs))} other paragraphs")
+
+            # STEP 3: Now use the chart understanding to select matching paragraph
+            logger.info(f"   📝 Step 3: Using chart analysis to select matching paragraph...")
+            extraction_prompt = f"""CHART SHOWS:
+{chart_understanding}
+
+ARTICLE PARAGRAPHS:
 {paragraphs_text}
 
-INSTRUCTIONS:
-1. Look at the chart - what is it showing? (S&P 500, Dow Jones, Nasdaq, a specific stock, market indices, etc.)
-2. Find the paragraph number (1-{len(paragraphs_to_analyze)}) that describes this same topic
-3. The paragraph should mention the same financial data, indices, or stocks shown in the chart
-4. Return ONLY the paragraph number (e.g., "3")
-5. If you cannot find ANY matching paragraph, return "NONE"
+TASK:
+Find and COPY the exact text from the paragraphs that describes what's in the chart.
 
-Your selection:"""
+INSTRUCTIONS:
+1. Look for mentions of the stock/company/index shown in the chart
+2. When you find it, COPY the exact 1-2 sentences that mention it
+3. Return ONLY the copied text - nothing else
+4. If you find nothing, return "NONE"
+
+EXAMPLE:
+If chart shows "Deere stock" and you find paragraph 7 says "Shares of Deere have popped 8% this year. The stock was last trading marginally higher on Friday"
+
+Then return EXACTLY:
+Shares of Deere have popped 8% this year. The stock was last trading marginally higher on Friday
+
+DO NOT return "PARAGRAPH_7" or "SENTENCES_7:" - just return the actual text.
+
+Your response (exact text from article):"""
 
             response = model.generate_content(
                 [extraction_prompt, pil_image],
@@ -640,39 +727,24 @@ Your selection:"""
 
             if response and response.text:
                 ai_response = response.text.strip()
-                logger.info(f"   🤖 AI response: {ai_response}")
+                logger.info(f"   🤖 AI response: {ai_response[:200]}...")
 
                 # Check if AI said NONE
-                if ai_response == "NONE":
+                if ai_response.upper() == "NONE" or ai_response.upper().startswith("NONE"):
                     logger.warning(f"   ⚠️ AI could not find matching paragraph")
                     return ""
 
-                # Try to extract paragraph number from AI response
-                match = re.search(r'\d+', ai_response)
-                if match:
-                    paragraph_num = int(match.group(0))
-                    logger.info(f"   ✅ AI selected paragraph #{paragraph_num}")
+                # AI should have returned the actual text directly
+                # Just clean it up and return it
+                description = ai_response.strip()
 
-                    # Check if paragraph number is valid
-                    if 1 <= paragraph_num <= len(paragraphs_to_analyze):
-                        # Get the complete paragraph text (0-indexed)
-                        selected_paragraph = paragraphs_to_analyze[paragraph_num - 1]
+                # Ensure it ends with proper punctuation
+                if description and not description.endswith(('.', '!', '?')):
+                    description += '.'
 
-                        # Return the complete paragraph from <p> tag
-                        description = selected_paragraph.strip()
+                logger.info(f"   ✅ AI extracted text: {description[:150]}...")
+                return description
 
-                        # Ensure it ends with proper punctuation
-                        if not description.endswith(('.', '!', '?')):
-                            description += '.'
-
-                        logger.info(f"   ✅ Complete paragraph from <p> tag: {description[:150]}...")
-                        return description
-                    else:
-                        logger.warning(f"   ⚠️ AI selected invalid paragraph number: {paragraph_num}")
-                        return ""
-                else:
-                    logger.warning(f"   ⚠️ Could not extract paragraph number from AI response")
-                    return ""
             else:
                 logger.warning(f"   ⚠️ Empty AI response")
                 return ""
