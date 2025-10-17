@@ -22,7 +22,7 @@ class TavilySearchInput(BaseModel):
     """Input schema for the Tavily search tool."""
     query: str = Field(..., description="Search query for financial news.")
     hours_back: int = Field(default=1, description="Search news from the past number of hours.")
-    max_results: int = Field(default=10, description="Maximum number of results to return.")
+    max_results: int = Field(default=20, description="Maximum number of results to return.")
 
 class TavilyFinancialTool(BaseTool):
     """
@@ -88,22 +88,39 @@ class TavilyFinancialTool(BaseTool):
         return f"{query} stock market financial news"
 
     def _filter_results_by_time(self, results: List[dict], start: datetime, end: datetime) -> List[dict]:
-        """Filter articles to ensure they are within the search window."""
+        """Filter articles to ensure they are within the search window - STRICT TIME ENFORCEMENT."""
         filtered = []
+        now = datetime.utcnow()
+        one_hour_ago = now - timedelta(hours=1)
+
+        logger.info(f"🕒 Filtering articles - Time window: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}")
+
         for article in results:
             date_str = article.get("published_date")
+
+            # STRICT: Reject articles without dates
             if not date_str:
-                # Include breaking news if no date but trusted source
-                domain = urlparse(article.get("url", "")).netloc.lower()
-                if domain.startswith("www."):
-                    domain = domain[4:]
-                if domain in self._trusted_domains() or self._is_breaking_news(article):
-                    filtered.append(article)
+                logger.debug(f"❌ Rejected (no date): {article.get('title', 'No title')[:60]}")
                 continue
 
+            # Parse the date
             parsed_date = self._parse_date(date_str)
-            if parsed_date and start <= parsed_date <= end:
+
+            # STRICT: Reject if date can't be parsed
+            if not parsed_date:
+                logger.debug(f"❌ Rejected (unparseable date '{date_str}'): {article.get('title', 'No title')[:60]}")
+                continue
+
+            # STRICT: Must be within the 1-hour window
+            if start <= parsed_date <= end:
+                age_minutes = (now - parsed_date).total_seconds() / 60
+                logger.info(f"✅ Accepted ({age_minutes:.0f}min old): {article.get('title', 'No title')[:60]}")
                 filtered.append(article)
+            else:
+                age_hours = (now - parsed_date).total_seconds() / 3600
+                logger.debug(f"❌ Rejected ({age_hours:.1f}h old): {article.get('title', 'No title')[:60]}")
+
+        logger.info(f"📊 Filter results: {len(filtered)}/{len(results)} articles within 1-hour window")
         return filtered
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
@@ -117,7 +134,6 @@ class TavilyFinancialTool(BaseTool):
                 return datetime.strptime(date_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
             if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
                 return datetime.strptime(date_str, "%Y-%m-%d")
-            # Handle relative formats like "2 hours ago"
             match = re.search(r'(\d+)\s*(minute|hour|day|week)s?\s*ago', date_str.lower())
             if match:
                 value, unit = int(match.group(1)), match.group(2)
@@ -150,18 +166,21 @@ class TavilyFinancialTool(BaseTool):
         return any(kw in text for kw in keywords)
 
     def _store_results(self, results: List[dict], query: str, start: datetime, end: datetime) -> str:
-        """Store filtered results in JSON."""
+        """Store filtered results in JSON with human-readable timestamps."""
         output_dir = Path("output/search_results")
         output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         safe_query = re.sub(r'[^\w\s-]', '', query).replace(' ', '-')[:50]
         filepath = output_dir / f"search_results_{timestamp}_{safe_query}.json"
 
+        # Format timestamps in human-readable format with AM/PM UTC
+        now = datetime.utcnow()
         output_data = {
             "query": query,
-            "search_time": datetime.utcnow().isoformat(),
-            "start_time": start.isoformat(),
-            "end_time": end.isoformat(),
+            "search_time": now.strftime("%Y-%m-%d %I:%M:%S %p UTC"),
+            "start_time": start.strftime("%Y-%m-%d %I:%M:%S %p UTC"),
+            "end_time": end.strftime("%Y-%m-%d %I:%M:%S %p UTC"),
+            "time_window_hours": 1,
             "total_articles": len(results),
             "articles": results
         }
