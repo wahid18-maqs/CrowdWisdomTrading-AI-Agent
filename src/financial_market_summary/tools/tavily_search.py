@@ -86,8 +86,30 @@ class TavilyTools(BaseTool):
                 search_depth="advanced",
                 include_images=False,
                 include_answer=True,
-                max_results=20,  # Always request 20 results from Tavily
-                time_range="day"  # Search last day, then filter by hours_back
+                max_results=20,
+                time_range="day",  # Search last day, then filter by hours_back
+                include_domains=[
+                    "cnbc.com",
+                    "bloomberg.com",
+                    "reuters.com",
+                    "marketwatch.com",
+                    "wsj.com",
+                    "finance.yahoo.com",
+                    "investing.com",
+                    "seekingalpha.com",
+                    "benzinga.com",
+                    "barrons.com"
+                ],
+                exclude_domains=[
+                    "youtube.com",
+                    "facebook.com",
+                    "twitter.com",
+                    "reddit.com",
+                    "instagram.com",
+                    "tiktok.com",
+                    "pinterest.com",
+                    "linkedin.com"
+                ]
             )
 
             # Filter results to only include articles within hours_back
@@ -138,8 +160,8 @@ class TavilyTools(BaseTool):
             search_result['results'] = filtered_results
             logger.info(f"Filtered from {original_count} to {len(filtered_results)} results (last {hours_back}h)")
 
-            # Store results in JSON
-            results_file = self._store_results(search_result, query, hours_back)
+            # Store results in JSON (always use 1 hour for consistency)
+            results_file = self._store_results(search_result, query, 1)
 
             # Format results
             formatted_result = "=== FINANCIAL NEWS SEARCH RESULTS ===\n\n"

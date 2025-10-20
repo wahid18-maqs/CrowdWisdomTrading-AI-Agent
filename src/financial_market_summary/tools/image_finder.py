@@ -113,13 +113,21 @@ class EnhancedImageFinder(BaseTool):
             with open(search_results_file, 'r', encoding='utf-8') as f:
                 search_data = json.load(f)
 
-            urls = []
+            cnbc_urls = []
+            other_urls = []
             articles = search_data.get('articles', [])
 
             for article in articles:
                 url = article.get('url')
                 if url and url.startswith('http'):
-                    urls.append(url)
+                    # Prioritize CNBC URLs silently
+                    if 'cnbc.com' in url.lower():
+                        cnbc_urls.append(url)
+                    else:
+                        other_urls.append(url)
+
+            # CNBC URLs first, then others
+            urls = cnbc_urls + other_urls
 
             logger.info(f"📄 Extracted {len(urls)} URLs from search results file")
             return urls

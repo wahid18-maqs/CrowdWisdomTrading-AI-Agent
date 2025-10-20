@@ -113,9 +113,7 @@ class FinancialMarketCrew:
                 "results": self.execution_results,
                 "execution_time": datetime.now().isoformat(),
                 "summary": {
-                    "workflow_type": "simplified_search_to_telegram",
-                    "sends_completed": sends_completed,
-                    "message_type": "raw_content_telegram"
+                    "workflow_type": "message sended to telegram",
                 }
             }
 

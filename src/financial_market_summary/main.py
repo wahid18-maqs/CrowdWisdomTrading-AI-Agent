@@ -183,9 +183,6 @@ def test_api_connections() -> Dict[str, str]:
             else:
                 test_results['telegram'] = f"HTTP {response.status_code}"
                 logger.error(f"Telegram API: Connection failed with HTTP status code {response.status_code}.")
-        else:
-            test_results['telegram'] = "No token"
-            logger.error("Telegram API: No token provided.")
     except Exception as e:
         test_results['telegram'] = f"Failed: {str(e)}"
         logger.error(f"Telegram API: Connection failed with error: {str(e)}")
