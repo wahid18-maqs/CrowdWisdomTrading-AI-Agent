@@ -2,13 +2,14 @@ import os
 import logging
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from crewai.tools import BaseTool
 from tavily import TavilyClient
 from dotenv import load_dotenv
+from dateutil import parser as date_parser
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -69,8 +70,8 @@ class TavilyTools(BaseTool):
         Execute the search operation
         Args:
             query: The search query string
-            hours_back: Number of hours back (kept for compatibility, not used by TavilyClient)
-            max_results: Maximum number of results (kept for compatibility, always uses 20)
+            hours_back: Number of hours back to filter results (default: 1 hour)
+            max_results: Maximum number of results to return
         Returns:
             str: Formatted search results with file path
         """
@@ -78,21 +79,72 @@ class TavilyTools(BaseTool):
             # Create a single query
             search_query = TavilyQuery(query=query)
 
-            # Perform search
+            # Perform search with time_range="day" (Tavily searches last 24h, then we filter to hours_back)
             search_result = self.tavily_client.search(
                 query=search_query.query,
+                topic="finance",  # Use finance topic for better financial news results
                 search_depth="advanced",
                 include_images=False,
                 include_answer=True,
-                max_results=20
+                max_results=20,  # Always request 20 results from Tavily
+                time_range="day"  # Search last day, then filter by hours_back
             )
 
+            # Filter results to only include articles within hours_back
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+            filtered_results = []
+
+            logger.info(f"Filtering {len(search_result.get('results', []))} results to last {hours_back} hour(s)")
+
+            for result in search_result.get('results', []):
+                # Try to find date field in result
+                date_found = False
+
+                # Check common date field names
+                for date_field in ['published_date', 'date', 'timestamp', 'created_at', 'pubDate']:
+                    if date_field in result:
+                        try:
+                            pub_date = date_parser.parse(result[date_field])
+                            # Make timezone-aware if naive
+                            if pub_date.tzinfo is None:
+                                pub_date = pub_date.replace(tzinfo=timezone.utc)
+
+                            # Calculate hours difference
+                            hours_diff = (datetime.now(timezone.utc) - pub_date).total_seconds() / 3600
+
+                            if hours_diff <= hours_back:
+                                filtered_results.append(result)
+                                logger.debug(f"Including: {result.get('title', '')[:60]} ({hours_diff:.1f}h ago)")
+                            else:
+                                logger.debug(f"Excluding: {result.get('title', '')[:60]} ({hours_diff:.1f}h ago)")
+
+                            date_found = True
+                            break
+                        except Exception as e:
+                            logger.debug(f"Error parsing date: {e}")
+                            continue
+
+                # If no date found, include result
+                if not date_found:
+                    filtered_results.append(result)
+                    logger.debug(f"No date info, including: {result.get('title', '')[:60]}")
+
+                # Stop when we have enough results
+                if len(filtered_results) >= max_results:
+                    break
+
+            # Update search_result with filtered results
+            original_count = len(search_result.get('results', []))
+            search_result['results'] = filtered_results
+            logger.info(f"Filtered from {original_count} to {len(filtered_results)} results (last {hours_back}h)")
+
             # Store results in JSON
-            results_file = self._store_results(search_result, query)
+            results_file = self._store_results(search_result, query, hours_back)
 
             # Format results
             formatted_result = "=== FINANCIAL NEWS SEARCH RESULTS ===\n\n"
             formatted_result += f"Query: {search_query.query}\n"
+            formatted_result += f"Time Range: Last {hours_back} hour(s)\n"
             formatted_result += f"Total Results: {len(search_result.get('results', []))}\n"
             formatted_result += f"**SEARCH_RESULTS_FILE_PATH**: {results_file}\n\n"
 
@@ -117,7 +169,7 @@ class TavilyTools(BaseTool):
             logger.error(error_msg)
             return error_msg
 
-    def _store_results(self, search_result: Dict[str, Any], query: str) -> str:
+    def _store_results(self, search_result: Dict[str, Any], query: str, hours_back: int = 1) -> str:
         """Store search results in JSON file."""
         output_dir = Path("output/search_results")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +182,7 @@ class TavilyTools(BaseTool):
         output_data = {
             "query": query,
             "search_time": now.strftime("%Y-%m-%d %I:%M:%S %p UTC"),
+            "time_range_hours": hours_back,
             "total_results": len(search_result.get('results', [])),
             "answer": search_result.get('answer', ''),
             "articles": search_result.get('results', [])  # Store as 'articles' for image_finder
