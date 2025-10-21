@@ -1,143 +1,222 @@
-# CrowdWisdomTrading AI Agent 📈
+# Daily Summary Telegram
 
-An AI-powered financial news aggregation and distribution system built with CrewAI that automatically searches, summarizes, and distributes US financial market updates to Telegram channels in multiple languages.
+An AI-powered financial news aggregation and multilingual distribution bot that automatically searches for US financial market news, captures chart images, and delivers formatted summaries to Telegram channels in 5 languages.
 
-##  Features
+## Overview
 
-- **Real-time Financial News Search**: Aggregates latest US market news from trusted sources
-- **AI-Powered Summarization**: Creates concise, actionable market summaries under 500 words
-- **English-Only Content**: Focused content delivery in English
-- **Visual Content Integration**: Automatically finds and includes relevant financial charts and graphs
-- **Telegram Distribution**: Sends formatted summaries to designated Telegram channels
-- **Rate Limiting & Error Handling**: Built-in API quota management and retry mechanisms
-- **Comprehensive Logging**: Detailed execution tracking and error reporting
+Daily Summary Telegram uses a CrewAI-powered multi-agent workflow to:
+- Search for latest US financial news from multiple sources
+- Extract and analyze financial images from articles
+- Generate concise market summaries with AI
+- Translate content to multiple languages
+- Deliver formatted updates to language specific Telegram bots
 
-##  Architecture
+## Key Features
 
-The system uses a multi-agent architecture powered by CrewAI:
+### Automated News Aggregation
+- **1-hour news search** using Tavily API
+- **Multi-source coverage**: Yahoo Finance, CNBC, Reuters, Bloomberg, WSJ, and more
+- **Intelligent filtering** for relevant market news
 
-- **Search Agent**: Gathers financial news from multiple sources (Tavily, Serper APIs)
-- **Summary Agent**: Creates professional market analysis using Gemini LLM
-- **Formatting Agent**: Enhances content with relevant charts and visual elements
-- **Distribution Agent**: Manages Telegram delivery with retry logic
+### AI-Powered Chart Extraction
+- **Image extraction technology** captures image from article URLs
+- **Vision AI analysis** using Gemini 2.5 Flash-exp for image description matching
+- **Smart paragraph extraction** from article text using Crawl4AI
+- **Automated image descriptions** by matching charts with article content
 
-##  Prerequisites
+### Professional Market Summaries
+- **Two-message format** for Telegram delivery:
+  - Message 1: Short image caption with chart description
+  - Message 2: Comprehensive market summary (≤250 words)
+- **Structured sections**: Market Overview, Macro News, Notable Stocks, Commodities & FX
+- **Live chart links** : for major indices
+- **Dynamic titles** based on the day's main market theme
 
-- Python 3.8+
-- API keys for:
-  - Google Gemini API (for LLM operations)
-  - Tavily API (for news search)
-  - Serper API (backup search)
-  - Telegram Bot Token & Chat ID
+### Multilingual Distribution
+- **5 languages supported**: English, Arabic, Hindi, Hebrew, German
+- **Separate Telegram bots** for each language
+- **Automated translation** while preserving financial data accuracy
+- **Stock symbols and numbers** remain unchanged across translations
 
-##  Working
 
-https://github.com/user-attachments/assets/f6e98a73-c86a-4082-bd58-1d834e2fef6b
+### Key Technologies
 
-##  Installation
+- **CrewAI**: Multi-agent orchestration framework
+- **Google Gemini 2.5 Flash**: LLM for summaries and vision analysis
+- **Tavily API**: Financial news search
+- **Playwright**: Browser automation for chart screenshots
+- **Crawl4AI**: Article text extraction
+- **BeautifulSoup**: HTML parsing
+- **python-telegram-bot**: Telegram API integration
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/wahid18-maqs/financial_market_summary.git
-   cd financial-market-summary
-   ```
+## Installation
 
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
 
-3. **Set up environment variables**
-   
-   Create a `.env` file in the root directory:
-   ```env
-   
-   GOOGLE_API_KEY=your_gemini_api_key_here
-   TAVILY_API_KEY=your_tavily_api_key_here
-   SERPER_API_KEY=your_serper_api_key_here
-   TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-   TELEGRAM_CHAT_ID=your_telegram_chat_id
-   ```
+### Step 1: Clone Repository
 
-##  Project Structure
-
-```
-src/financial_market_summary/
-├── main.py                 # Entry point and orchestration
-├── crew.py                 # CrewAI workflow management
-├── agents.py               # AI agent definitions
-├── tasks.py                # Task definitions (alternative workflow)
-├── LLM_config.py          # Rate limiting and configuration
-└── tools/
-    ├── tavily_search.py    # News search tools
-    ├── telegram_sender.py  # Telegram distribution
-    ├── translator.py       # Multi-language translation
-    └── image_finder.py     # Financial chart finder
+```bash
+git clone https://github.com/wahid18-maqs/financial_market_summary.git
+cd financial_market_summary
 ```
 
-##  Configuration
+### Step 2: Install Dependencies
 
-### API Tier Detection
-The system automatically detects your API tier and adjusts behavior:
-- **Free Tier**: Conservative rate limiting, reduced search results
-- **Paid Tier**: Standard rate limiting, full feature set
+```bash
+pip install -r requirements.txt
+```
 
-### Workflow Settings
-Customize in `LLM_config.py`:
-- `max_summary_words`: Summary length limit (default: 500)
-- `max_search_results`: Number of news articles to process (default: 8)
-- `search_hours_back`: Time window for news search (default: 2 hours)
+### Step 3: Install Playwright Browsers
 
-##  Usage
+```bash
+playwright install
+```
 
-### Basic Execution
+### Step 4: Configure Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+# Google Gemini API (Required)
+GOOGLE_API_KEY=your_gemini_api_key_here
+
+# Tavily API (Required)
+TAVILY_API_KEY=your_tavily_api_key_here
+
+# Telegram Bots (At least one required)
+TELEGRAM_BOT_TOKEN=your_english_bot_token_here
+TELEGRAM_CHAT_ID=your_chat_id_here
+
+# Optional: Additional Language Bots
+TELEGRAM_BOT_TOKEN_ARABIC=your_arabic_bot_token_here
+TELEGRAM_CHAT_ID_ARABIC=your_arabic_chat_id_here
+
+TELEGRAM_BOT_TOKEN_HINDI=your_hindi_bot_token_here
+TELEGRAM_CHAT_ID_HINDI=your_hindi_chat_id_here
+
+TELEGRAM_BOT_TOKEN_HEBREW=your_hebrew_bot_token_here
+TELEGRAM_CHAT_ID_HEBREW=your_hebrew_chat_id_here
+
+TELEGRAM_BOT_TOKEN_GERMAN=your_german_bot_token_here
+TELEGRAM_CHAT_ID_GERMAN=your_german_chat_id_here
+```
+
+### Getting API Keys
+
+#### Google Gemini API
+1. Visit [Google AI Studio](https://ai.google.dev/)
+2. Sign in with your Google account
+3. Click "Get API Key"
+4. Copy your API key to `.env`
+
+#### Tavily API
+1. Visit [Tavily](https://tavily.com/)
+2. Sign up for an account
+3. Navigate to your dashboard
+4. Copy your API key to `.env`
+
+#### Telegram Bot Setup
+1. Open Telegram and search for [@BotFather](https://t.me/botfather)
+2. Send `/newbot` command
+3. Follow prompts to create your bot
+4. Copy the bot token to `.env`
+5. To get chat ID:
+   - Send a message to your bot
+   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+   - Find `"chat":{"id":` in the response
+   - Copy the chat ID to `.env`
+
+## Usage
+
+### Run the Bot
+
 ```bash
 python -m src.financial_market_summary.main
 ```
 
-### API Connection Testing
-The system includes pre-flight checks that test all API connections before execution.
-
 ### Expected Execution Times
-- **Free Tier**: 8-12 minutes (conservative rate limiting)
-- **Paid Tier**: 3-5 minutes (standard rate limiting)
 
-##  Output
+- **Free Tier APIs**: 8-12 minutes (conservative rate limiting)
+- **Paid Tier APIs**: 3-5 minutes (standard rate limiting)
 
-The system generates:
+The system automatically detects your API tier and adjusts behavior accordingly.
 
-1. **English Summary**: Professional market analysis with key sections:
-   - Market Overview
-   - Key Movers (top performing stocks)
-   - Sector Analysis
-   - Economic Highlights
-   - Tomorrow's Watch
+### Workflow Process
 
-2. **Visual Content**: 1-2 relevant financial charts or graphs
-3. **Telegram Delivery**: Formatted messages sent to configured channels
+1. **Pre-flight Checks** (10-15 seconds)
+   - Validates environment variables
+   - Tests API connections (Gemini, Tavily, Telegram)
+   - Detects API tier (free vs paid)
 
-##  Troubleshooting
+2. **News Search** (30-60 seconds)
+   - Searches Tavily for financial news (24-hour window)
+   - Stores search results in `output/search_results/`
 
-### Common Issues
+3. **Image Extraction** (60-120 seconds)
+   - Visits article URLs with Playwright
+   - Captures image
+   - Saves to `output/screenshots/`
 
-**Rate Limit Errors (429)**
-- Wait 1-2 minutes before retrying
-- Consider upgrading to paid API tiers
-- Check quota limits at respective API providers
+4. **AI Analysis** (30-60 seconds per article)
+   - Analyzes image with Vision AI
+   - Extracts article text with Crawl4AI
+   - Matches image with descriptions
+   - Saves results to `output/image_results/`
 
-**Missing API Keys**
-- Ensure all required keys are in `.env` file
-- Verify API key permissions and quotas
+5. **Summary Creation** (30-45 seconds)
+   - Generates two-message format summary
+   - Includes image caption and full summary
+   - Adds live chart links
 
+6. **Distribution** (10-20 seconds per language)
+   - Sends to English Telegram bot
+   - Translates to 4 additional languages
+   - Sends to language-specific bots
 
-##  Workflow Process
+7. **Completion**
+   - Saves workflow results to `output/workflow_result_*.json`
+   - Logs execution time and status
 
- <img width="343" height="720" alt="financial_workflow_flowchart" src="https://github.com/user-attachments/assets/1c0da789-641c-4cec-804b-bdb142453013" />
+## Output
 
-##  Contributing
+### Telegram Messages
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+**Message 1 (Image Caption)**:
+- Short engaging caption (≤150 words)
+- Description of the financial chart
+
+**Message 2 (Full Summary)**:
+- **Title**: Based on day's main market theme
+- **Market Overview**: Dow, S&P 500, Nasdaq performance
+- **Macro News**: 2-3 key background events
+- **Notable Stocks**: 2-3 significant movers with explanations
+- **Commodities & FX**: Brief descriptions if relevant
+- **Live Charts**: Links to major indices
+- **Disclaimer**: Investment advice notice
+
+### Saved Files
+
+All outputs are saved in the `output/` directory:
+
+```
+output/
+├── search_results/          # Tavily search results (JSON)
+├── screenshots/             # Chart images (PNG)
+├── image_results/          # Image analysis results (JSON)
+└── workflow_result_*.json  # Final execution summary
+```
+
+## Project Structure
+
+```
+src/financial_market_summary/
+├── main.py                 # Entry point with API checks
+├── crew_bot.py             # CrewAI workflow orchestration
+├── agents.py               # AI agent definitions
+├── LLM_config.py          # Rate limiting configuration
+└── tools/
+    ├── tavily_search.py    # News search tool
+    ├── image_finder.py     # Chart extraction & AI analysis
+    ├── translator.py       # Multi-language translation
+    └── telegram_sender.py  # Telegram delivery
+```
+
