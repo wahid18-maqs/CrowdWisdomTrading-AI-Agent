@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 class EnhancedImageFinderInput(BaseModel):
     search_content: str = Field(description="Financial content to find relevant images for")
-    mentioned_stocks: Optional[List[str]] = Field(default=[], description="Stock symbols mentioned in content")
     max_images: Optional[int] = Field(default=1, description="Maximum number of images to find")
     search_results_file: str = Field(description="Path to Tavily search results JSON file")
 
@@ -36,74 +35,86 @@ class EnhancedImageFinder(BaseTool):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _run(self, search_content: str, mentioned_stocks: List[str] = None, max_images: int = 1, search_results_file: str = "") -> str:
+    def _run(self, search_content: str, max_images: int = 1, search_results_file: str = "") -> str:
         try:
             logger.info("="*60)
-            logger.info("🖼️ IMAGE FINDER STARTED")
+            logger.info(" IMAGE FINDER STARTED")
             logger.info("="*60)
 
-            if mentioned_stocks is None:
-                mentioned_stocks = []
-
-            # Extract stock symbols from content if not provided
-            if not mentioned_stocks:
-                mentioned_stocks = self._extract_stock_symbols(search_content)
-
-            logger.info(f"📊 Mentioned stocks: {mentioned_stocks}")
-            logger.info(f"🎯 Max images to find: {max_images}")
-            logger.info(f"📁 Search results file: {search_results_file}")
+            logger.info(f" Max images to find: {max_images}")
+            logger.info(f" Search results file: {search_results_file}")
 
             # Always extract URLs from search results file
             if not search_results_file:
-                logger.error("❌ No search results file provided")
+                logger.error(" No search results file provided")
                 return json.dumps([], indent=2)
 
             article_urls = self._extract_urls_from_search_results(search_results_file)
-            logger.info(f"📄 Extracted {len(article_urls)} URLs from search results")
+            logger.info(f" Extracted {len(article_urls)} URLs from search results")
 
             if not article_urls:
-                logger.warning("⚠️ No article URLs found in search results")
+                logger.warning(" No article URLs found in search results")
                 return json.dumps([], indent=2)
 
             # Extract screenshots from article URLs
-            logger.info(f"📸 Starting screenshot extraction from {len(article_urls)} URLs...")
+            logger.info(f" Starting screenshot extraction from {len(article_urls)} URLs...")
             extracted_images = self._extract_screenshots_from_urls(article_urls, search_content, max_images)
-            logger.info(f"📊 Screenshot extraction complete: {len(extracted_images)} images captured")
+            logger.info(f" Screenshot extraction complete: {len(extracted_images)} images captured")
 
             if not extracted_images:
-                logger.warning("⚠️ No screenshots were captured from any URLs")
+                logger.warning(" No screenshots were captured from any URLs")
                 return json.dumps([], indent=2)
 
             # Extract descriptions from article URLs (web scraping, NO AI)
-            logger.info(f"📄 Extracting descriptions from article URLs for {len(extracted_images)} images...")
+            logger.info(f" Extracting descriptions from article URLs for {len(extracted_images)} images...")
             extracted_images = self._generate_ai_descriptions(extracted_images, search_content)
-            logger.info(f"✅ Descriptions extracted from URLs")
+            logger.info(f" Descriptions extracted from URLs")
 
             # Save and return
-            logger.info(f"💾 Saving {len(extracted_images)} image results...")
+            logger.info(f" Saving {len(extracted_images)} image results...")
             self._save_image_results(extracted_images, search_content)
 
             logger.info("="*60)
-            logger.info(f"✅ IMAGE FINDER COMPLETED: {len(extracted_images)} images")
+            logger.info(f" IMAGE FINDER COMPLETED: {len(extracted_images)} images")
             logger.info("="*60)
 
             return json.dumps(extracted_images[:max_images], indent=2)
 
         except Exception as e:
-            logger.error(f"❌ Image finder failed with exception: {e}", exc_info=True)
+            logger.error(f" Image finder failed with exception: {e}", exc_info=True)
             return json.dumps([], indent=2)
 
-    def _extract_stock_symbols(self, content: str) -> List[str]:
-        """Extract stock symbols from content"""
-        stocks = re.findall(r'\b([A-Z]{2,5})\b', content)
-        major_stocks = {
-            'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'TSLA', 'NVDA', 'META',
-            'FDX', 'INTC', 'AMD', 'NFLX', 'ADBE', 'CRM', 'ORCL', 'IBM',
-            'JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'V', 'MA'
-        }
+    def _extract_h1_from_url(self, url: str) -> str:
+        """Extract h1 heading from article URL"""
+        try:
+            logger.info(f"    Extracting h1 heading from: {url[:80]}...")
 
-        valid_stocks = [stock for stock in stocks if stock in major_stocks]
-        return list(set(valid_stocks))[:5]
+            response = requests.get(
+                url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                },
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                h1_tag = soup.find('h1')
+
+                if h1_tag:
+                    h1_text = h1_tag.get_text(strip=True)
+                    logger.info(f"    Found h1: {h1_text[:80]}...")
+                    return h1_text
+                else:
+                    logger.warning(f"    No h1 tag found")
+                    return f'Financial chart from {urlparse(url).netloc}'
+            else:
+                logger.warning(f"    HTTP {response.status_code}")
+                return f'Financial chart from {urlparse(url).netloc}'
+
+        except Exception as e:
+            logger.error(f"    H1 extraction failed: {e}")
+            return f'Financial chart from {urlparse(url).netloc}'
 
     def _extract_urls_from_search_results(self, search_results_file: str) -> List[str]:
         """Extract article URLs from Tavily search results JSON file"""
@@ -127,7 +138,7 @@ class EnhancedImageFinder(BaseTool):
             # CNBC URLs first, then others
             urls = cnbc_urls + other_urls
 
-            logger.info(f"📄 Extracted {len(urls)} URLs from search results file")
+            logger.info(f" Extracted {len(urls)} URLs from search results file")
             return urls
 
         except Exception as e:
@@ -143,7 +154,7 @@ class EnhancedImageFinder(BaseTool):
         attempts = 0
         skipped_yahoo = 0
 
-        logger.info(f"🔍 Starting screenshot extraction:")
+        logger.info(f" Starting screenshot extraction:")
         logger.info(f"   - Total URLs available: {len(article_urls)}")
         logger.info(f"   - Will attempt ALL URLs: {max_attempts}")
         logger.info(f"   - Target images: {max_images}")
@@ -157,26 +168,26 @@ class EnhancedImageFinder(BaseTool):
             attempts += 1
 
             try:
-                logger.info(f"📸 [{idx}/{len(article_urls)}] Attempt {attempts}/{max_attempts}")
+                logger.info(f" [{idx}/{len(article_urls)}] Attempt {attempts}/{max_attempts}")
                 logger.info(f"   URL: {url}")
                 screenshot_data = self._capture_chart_screenshot(url)
 
                 if screenshot_data:
                     extracted_images.append(screenshot_data)
-                    logger.info(f"✅ Screenshot captured successfully!")
+                    logger.info(f" Screenshot captured successfully!")
                     logger.info(f"   Saved to: {screenshot_data.get('url', 'unknown')}")
                 else:
-                    logger.warning(f"⚠️ Screenshot capture returned None for {url[:80]}...")
+                    logger.warning(f" Screenshot capture returned None for {url[:80]}...")
 
                 if len(extracted_images) >= max_images:
-                    logger.info(f"✅ Target images ({max_images}) reached, stopping")
+                    logger.info(f" Target images ({max_images}) reached, stopping")
                     break
 
             except Exception as e:
-                logger.error(f"❌ Exception during screenshot from {url[:80]}...: {e}", exc_info=True)
+                logger.error(f" Exception during screenshot from {url[:80]}...: {e}", exc_info=True)
                 continue
 
-        logger.info(f"📊 Screenshot extraction summary:")
+        logger.info(f" Screenshot extraction summary:")
         logger.info(f"   - URLs processed: {idx}")
         logger.info(f"   - Yahoo Finance skipped: {skipped_yahoo}")
         logger.info(f"   - Screenshot attempts: {attempts}")
@@ -209,21 +220,21 @@ class EnhancedImageFinder(BaseTool):
                 page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
                 # Load page with more aggressive timeout and fallback strategies
-                logger.info(f"📖 Loading page: {article_url}")
+                logger.info(f" Loading page: {article_url}")
                 try:
                     # Try with domcontentloaded first (faster)
                     page.goto(article_url, wait_until='domcontentloaded', timeout=20000)
-                    logger.info("✅ Page loaded (domcontentloaded)")
+                    logger.info(" Page loaded (domcontentloaded)")
                     page.wait_for_timeout(3000)
                 except Exception as e:
-                    logger.warning(f"⚠️ domcontentloaded failed, trying load strategy: {e}")
+                    logger.warning(f" domcontentloaded failed, trying load strategy: {e}")
                     try:
                         # Fallback to basic load
                         page.goto(article_url, wait_until='load', timeout=25000)
-                        logger.info("✅ Page loaded (load)")
+                        logger.info(" Page loaded (load)")
                         page.wait_for_timeout(2000)
                     except Exception as e2:
-                        logger.error(f"❌ Both load strategies failed: {e2}")
+                        logger.error(f" Both load strategies failed: {e2}")
                         context.close()
                         browser.close()
                         return None
@@ -231,20 +242,20 @@ class EnhancedImageFinder(BaseTool):
                 # Scroll to load dynamic content and wait for charts to render
                 try:
                     # Scroll multiple times to trigger lazy loading
-                    logger.info(f"📜 Scrolling page to trigger chart loading...")
+                    logger.info(f" Scrolling page to trigger chart loading...")
                     page.evaluate("window.scrollTo(0, 800)")
                     page.wait_for_timeout(5000)  # Increased to 5s
                     page.evaluate("window.scrollTo(0, 1600)")
                     page.wait_for_timeout(5000)  # Increased to 5s
                     page.evaluate("window.scrollTo(0, 2400)")
                     page.wait_for_timeout(5000)  # Increased to 5s
-                    logger.info(f"✅ Scrolled page to load dynamic content")
+                    logger.info(f" Scrolled page to load dynamic content")
                 except Exception as e:
-                    logger.warning(f"⚠️ Scroll failed: {e}")
+                    logger.warning(f" Scroll failed: {e}")
 
                 # Hide all overlays, modals, and popups with CSS injection
                 try:
-                    logger.info(f"🚫 Injecting CSS to hide popups and overlays...")
+                    logger.info(f" Injecting CSS to hide popups and overlays...")
                     page.add_style_tag(content="""
                         /* Hide dialogs and modals - EXCLUDE chart-related elements */
                         [role="dialog"]:not([class*="chart"]):not([id*="chart"]),
@@ -277,19 +288,19 @@ class EnhancedImageFinder(BaseTool):
                             overflow: visible !important;
                         }
                     """)
-                    logger.info(f"✅ CSS injection complete - popups should be hidden")
+                    logger.info(f" CSS injection complete - popups should be hidden")
                 except Exception as e:
-                    logger.warning(f"⚠️ CSS injection failed (non-critical): {e}")
+                    logger.warning(f" CSS injection failed (non-critical): {e}")
 
                 # Wait significantly longer for charts to fully render (live market data)
                 logger.info(f"⏳ Waiting 15 seconds for live market charts to fully render...")
                 page.wait_for_timeout(15000)  # Increased from 8s to 15s for live data
-                logger.info(f"✅ Chart rendering wait complete")
+                logger.info(f" Chart rendering wait complete")
 
                 screenshot_data = None
 
                 # Search for chart elements on page
-                logger.info(f"🔍 Searching for chart elements on page...")
+                logger.info(f" Searching for chart elements on page...")
 
                 # Find chart elements - prioritize containers that include labels/legends
                 chart_selectors = [
@@ -331,42 +342,42 @@ class EnhancedImageFinder(BaseTool):
                             # Get bounding box first (before scrolling)
                             box = element.bounding_box()
                             if not box:
-                                logger.warning(f"   ⚠️ Element #{elem_idx + 1} has no bounding box, trying next...")
+                                logger.warning(f"    Element #{elem_idx + 1} has no bounding box, trying next...")
                                 continue
 
                             if box['width'] < 200 or box['height'] < 100:
-                                logger.warning(f"   ⚠️ Element #{elem_idx + 1} too small ({box['width']}x{box['height']}), trying next...")
+                                logger.warning(f"    Element #{elem_idx + 1} too small ({box['width']}x{box['height']}), trying next...")
                                 continue
 
-                            logger.info(f"   ✅ Element #{elem_idx + 1} has valid size: {box['width']}x{box['height']}")
+                            logger.info(f"    Element #{elem_idx + 1} has valid size: {box['width']}x{box['height']}")
 
                             # Try to scroll element into view (with timeout protection)
                             try:
                                 element.scroll_into_view_if_needed(timeout=5000)
-                                logger.info(f"   ✅ Scrolled element into view")
+                                logger.info(f"    Scrolled element into view")
                                 # Wait extra time after scrolling for chart to render
                                 logger.info(f"   ⏳ Waiting 10 seconds for chart to render after scroll...")
                                 page.wait_for_timeout(10000)  # Increased from 5s to 10s
                             except Exception as scroll_error:
-                                logger.warning(f"   ⚠️ Scroll timeout/failed, continuing anyway: {scroll_error}")
+                                logger.warning(f"    Scroll timeout/failed, continuing anyway: {scroll_error}")
                                 # Continue anyway - element might already be visible
                                 # Still wait a bit for rendering
                                 page.wait_for_timeout(5000)  # Increased from 3s to 5s
 
                             # Use the element directly (we're already targeting containers)
                             target_element = element
-                            logger.info(f"   📊 Using element: {box['width']}x{box['height']}")
+                            logger.info(f"    Using element: {box['width']}x{box['height']}")
 
                             # Take screenshot with timeout protection
                             try:
-                                logger.info(f"   📸 Taking screenshot...")
+                                logger.info(f"    Taking screenshot...")
                                 screenshot_bytes = target_element.screenshot(
                                     timeout=15000,  # Increased back to 15s
                                     animations='disabled'
                                 )
-                                logger.info(f"   ✅ Screenshot captured: {len(screenshot_bytes)} bytes")
+                                logger.info(f"    Screenshot captured: {len(screenshot_bytes)} bytes")
                             except Exception as screenshot_error:
-                                logger.error(f"   ❌ Screenshot failed: {screenshot_error}")
+                                logger.error(f"    Screenshot failed: {screenshot_error}")
                                 continue  # Try next element
 
                             # Save screenshot
@@ -382,11 +393,14 @@ class EnhancedImageFinder(BaseTool):
                             with open(filepath, 'wb') as f:
                                 f.write(screenshot_bytes)
 
-                            logger.info(f"💾 Screenshot saved: {filepath}")
+                            logger.info(f" Screenshot saved: {filepath}")
+
+                            # Extract h1 heading for title
+                            article_title = self._extract_h1_from_url(article_url)
 
                             screenshot_data = {
                                 'url': str(filepath).replace('\\', '/'),
-                                'title': f'Financial chart from {urlparse(article_url).netloc}',
+                                'title': article_title,
                                 'source': urlparse(article_url).netloc,
                                 'type': 'screenshot',
                                 'telegram_compatible': True,
@@ -406,12 +420,12 @@ class EnhancedImageFinder(BaseTool):
                             break
 
                     except Exception as e:
-                        logger.warning(f"   ⚠️ Failed with selector '{selector}': {e}")
+                        logger.warning(f"    Failed with selector '{selector}': {e}")
                         continue
 
                 # Log if no charts were found at all
                 if not screenshot_data:
-                    logger.warning(f"❌ No usable chart elements found on page")
+                    logger.warning(f" No usable chart elements found on page")
                     logger.info(f"   Tried {len(chart_selectors)} different selectors")
 
                 context.close()
@@ -426,56 +440,56 @@ class EnhancedImageFinder(BaseTool):
     def _generate_ai_descriptions(self, extracted_images: List[Dict[str, Any]], search_content: str) -> List[Dict[str, Any]]:
         """Extract descriptions using Crawl4AI + AI selection"""
         try:
-            logger.info(f"📄 Extracting descriptions using Crawl4AI for {len(extracted_images)} images")
+            logger.info(f" Extracting descriptions using Crawl4AI for {len(extracted_images)} images")
 
             for img in extracted_images:
                 try:
                     source_article = img.get('source_article', '')
                     if not source_article:
-                        logger.error(f"❌ No source article URL - skipping")
+                        logger.error(f" No source article URL - skipping")
                         img['image_description'] = ''
                         continue
 
-                    logger.info(f"🌐 Crawling article: {source_article[:80]}...")
+                    logger.info(f" Crawling article: {source_article[:80]}...")
 
                     # Use Crawl4AI to extract paragraphs from <p> tags
                     paragraphs = self._crawl_article_with_crawl4ai(source_article)
 
                     if not paragraphs:
-                        logger.error(f"❌ Crawl4AI could not extract paragraphs")
+                        logger.error(f" Crawl4AI could not extract paragraphs")
                         img['image_description'] = ''
                         continue
 
-                    logger.info(f"📝 Crawl4AI extracted {len(paragraphs)} paragraphs")
+                    logger.info(f" Crawl4AI extracted {len(paragraphs)} paragraphs")
 
                     # Use AI to select which paragraph describes the chart
                     image_path = img.get('url', '')
                     if image_path and os.path.exists(image_path):
-                        logger.info(f"   🤖 Using AI to select chart description from <p> tags...")
+                        logger.info(f"    Using AI to select chart description from <p> tags...")
                         description = self._ai_extract_chart_description(image_path, paragraphs)
 
                         if description:
                             img['image_description'] = description
-                            logger.info(f"✅ AI extracted description: {description[:100]}...")
+                            logger.info(f" AI extracted description: {description[:100]}...")
                         else:
-                            logger.error(f"❌ AI could not extract chart description")
+                            logger.error(f" AI could not extract chart description")
                             img['image_description'] = ''
                     else:
-                        logger.error(f"❌ Image file not found")
+                        logger.error(f" Image file not found")
                         img['image_description'] = ''
 
                     # Small delay to avoid rate limits
                     time.sleep(0.5)
 
                 except Exception as e:
-                    logger.error(f"❌ Description extraction failed: {e}")
+                    logger.error(f" Description extraction failed: {e}")
                     img['image_description'] = ''
                     continue
 
             return extracted_images
 
         except Exception as e:
-            logger.error(f"❌ Description extraction system failed: {e}")
+            logger.error(f" Description extraction system failed: {e}")
             return extracted_images
 
     def _crawl_article_with_crawl4ai(self, article_url: str) -> List[str]:
@@ -487,7 +501,7 @@ class EnhancedImageFinder(BaseTool):
             import asyncio
             from crawl4ai import AsyncWebCrawler
 
-            logger.info(f"   🕷️ Crawl4AI crawling URL...")
+            logger.info(f"    Crawl4AI crawling URL...")
 
             # Define async function to crawl
             async def crawl():
@@ -504,22 +518,22 @@ class EnhancedImageFinder(BaseTool):
 
                 if hasattr(result, 'cleaned_html') and result.cleaned_html:
                     html_content = result.cleaned_html
-                    logger.info(f"   ✅ Using cleaned_html")
+                    logger.info(f"    Using cleaned_html")
                 elif hasattr(result, 'html') and result.html:
                     html_content = result.html
-                    logger.info(f"   ✅ Using raw html")
+                    logger.info(f"    Using raw html")
                 else:
-                    logger.error(f"   ❌ No HTML content available")
+                    logger.error(f"    No HTML content available")
                     return []
 
-                logger.info(f"   ✅ Crawl4AI success: {len(html_content)} chars")
+                logger.info(f"    Crawl4AI success: {len(html_content)} chars")
 
                 # Parse HTML with BeautifulSoup to extract <p> tags
                 soup = BeautifulSoup(html_content, 'html.parser')
 
                 # Extract all <p> tags
                 paragraphs = soup.find_all('p')
-                logger.info(f"   📄 Found {len(paragraphs)} <p> tags")
+                logger.info(f"    Found {len(paragraphs)} <p> tags")
 
                 # Extract text from <p> tags and filter
                 paragraph_texts = []
@@ -547,20 +561,20 @@ class EnhancedImageFinder(BaseTool):
                     if any(keyword in text_lower for keyword in financial_keywords):
                         paragraph_texts.append(text)
 
-                logger.info(f"   ✅ Extracted {len(paragraph_texts)} relevant paragraphs")
+                logger.info(f"    Extracted {len(paragraph_texts)} relevant paragraphs")
 
                 if paragraph_texts:
-                    logger.info(f"   📄 First paragraph preview: {paragraph_texts[0][:150]}...")
+                    logger.info(f"    First paragraph preview: {paragraph_texts[0][:150]}...")
 
                 return paragraph_texts
 
             else:
                 error_msg = result.error_message if hasattr(result, 'error_message') else 'Unknown error'
-                logger.error(f"   ❌ Crawl4AI failed: {error_msg}")
+                logger.error(f"    Crawl4AI failed: {error_msg}")
                 return []
 
         except Exception as e:
-            logger.error(f"   ❌ Crawl4AI exception: {e}")
+            logger.error(f"    Crawl4AI exception: {e}")
             return []
 
     def _ai_extract_chart_description(self, image_path: str, paragraphs: List[str]) -> str:
@@ -577,14 +591,14 @@ class EnhancedImageFinder(BaseTool):
 
             # Check if we have paragraphs
             if not paragraphs or len(paragraphs) == 0:
-                logger.error("   ❌ No paragraphs provided")
+                logger.error("    No paragraphs provided")
                 return ""
 
-            logger.info(f"   📝 Analyzing {len(paragraphs)} paragraphs from <p> tags...")
+            logger.info(f"    Analyzing {len(paragraphs)} paragraphs from <p> tags...")
 
             google_api_key = os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
-                logger.error("   ❌ GOOGLE_API_KEY not found")
+                logger.error("    GOOGLE_API_KEY not found")
                 return ""
 
             # Configure Gemini
@@ -619,10 +633,10 @@ class EnhancedImageFinder(BaseTool):
 
             paragraphs_text = "\n\n".join(numbered_paragraphs)
 
-            logger.info(f"   📄 First paragraph: {paragraphs_to_analyze[0][:150]}...")
+            logger.info(f"    First paragraph: {paragraphs_to_analyze[0][:150]}...")
 
             # STEP 1: First, analyze the chart to understand what it shows
-            logger.info(f"   🔍 Step 1: Analyzing chart image to identify content...")
+            logger.info(f"    Step 1: Analyzing chart image to identify content...")
             chart_analysis_prompt = """Analyze this financial chart image and describe what it shows.
 
 WHAT TO IDENTIFY:
@@ -647,9 +661,9 @@ Provide a brief 2-3 sentence analysis of what this chart displays."""
             chart_understanding = ""
             if chart_analysis_response and chart_analysis_response.text:
                 chart_understanding = chart_analysis_response.text.strip()
-                logger.info(f"   ✅ Chart analysis: {chart_understanding[:150]}...")
+                logger.info(f"    Chart analysis: {chart_understanding[:150]}...")
             else:
-                logger.warning(f"   ⚠️ Could not analyze chart, proceeding without analysis")
+                logger.warning(f"    Could not analyze chart, proceeding without analysis")
 
             # STEP 2: Pre-filter paragraphs that might mention the stock/company
             # Extract stock/company names dynamically from chart analysis
@@ -678,7 +692,7 @@ Provide a brief 2-3 sentence analysis of what this chart displays."""
                     stock_keywords.append(idx)
 
             if stock_keywords:
-                logger.info(f"   🔍 Pre-filtering for keywords: {stock_keywords}")
+                logger.info(f"    Pre-filtering for keywords: {stock_keywords}")
                 # Find paragraphs that mention these keywords
                 relevant_indices = []
                 for i, para in enumerate(paragraphs_to_analyze):
@@ -686,15 +700,15 @@ Provide a brief 2-3 sentence analysis of what this chart displays."""
                         relevant_indices.append(i)
 
                 if relevant_indices:
-                    logger.info(f"   ✅ Found {len(relevant_indices)} paragraphs mentioning {stock_keywords}")
+                    logger.info(f"    Found {len(relevant_indices)} paragraphs mentioning {stock_keywords}")
                     # Prioritize these paragraphs - put them first
                     prioritized_paragraphs = [paragraphs_to_analyze[i] for i in relevant_indices]
                     other_paragraphs = [p for i, p in enumerate(paragraphs_to_analyze) if i not in relevant_indices]
                     paragraphs_to_analyze = prioritized_paragraphs + other_paragraphs[:10]  # Keep some others too
-                    logger.info(f"   📝 Using {len(prioritized_paragraphs)} relevant + {min(10, len(other_paragraphs))} other paragraphs")
+                    logger.info(f"    Using {len(prioritized_paragraphs)} relevant + {min(10, len(other_paragraphs))} other paragraphs")
 
             # STEP 3: Now use the chart understanding to select matching paragraph
-            logger.info(f"   📝 Step 3: Using chart analysis to select matching paragraph...")
+            logger.info(f"    Step 3: Using chart analysis to select matching paragraph...")
             extraction_prompt = f"""CHART SHOWS:
 {chart_understanding}
 
@@ -732,11 +746,11 @@ Your response (exact text from article):"""
 
             if response and response.text:
                 ai_response = response.text.strip()
-                logger.info(f"   🤖 AI response: {ai_response[:200]}...")
+                logger.info(f"    AI response: {ai_response[:200]}...")
 
                 # Check if AI said NONE
                 if ai_response.upper() == "NONE" or ai_response.upper().startswith("NONE"):
-                    logger.warning(f"   ⚠️ AI could not find matching paragraph")
+                    logger.warning(f"    AI could not find matching paragraph")
                     return ""
 
                 # AI should have returned the actual text directly
@@ -747,15 +761,15 @@ Your response (exact text from article):"""
                 if description and not description.endswith(('.', '!', '?')):
                     description += '.'
 
-                logger.info(f"   ✅ AI extracted text: {description[:150]}...")
+                logger.info(f"    AI extracted text: {description[:150]}...")
                 return description
 
             else:
-                logger.warning(f"   ⚠️ Empty AI response")
+                logger.warning(f"    Empty AI response")
                 return ""
 
         except Exception as e:
-            logger.error(f"   ❌ AI extraction failed: {e}")
+            logger.error(f"    AI extraction failed: {e}")
             return ""
 
     def _verify_description_matches_image(self, image_path: str, description: str) -> bool:
@@ -769,7 +783,7 @@ Your response (exact text from article):"""
 
             google_api_key = os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
-                logger.warning("   ⚠️ GOOGLE_API_KEY not found - skipping verification")
+                logger.warning("    GOOGLE_API_KEY not found - skipping verification")
                 return True  # If no API key, accept the description
 
             # Configure Gemini
@@ -819,14 +833,14 @@ Answer ONLY "YES" or "NO"."""
 
             if response and response.text:
                 answer = response.text.strip().upper()
-                logger.info(f"   🤖 AI verification: {answer}")
+                logger.info(f"    AI verification: {answer}")
                 return "YES" in answer
             else:
-                logger.warning(f"   ⚠️ Empty AI response, accepting description")
+                logger.warning(f"    Empty AI response, accepting description")
                 return True
 
         except Exception as e:
-            logger.error(f"   ❌ AI verification failed: {e}")
+            logger.error(f"    AI verification failed: {e}")
             return True  # If verification fails, accept the description
 
     def _extract_description_from_text(self, article_text: str, search_content: str) -> str:
@@ -835,7 +849,7 @@ Answer ONLY "YES" or "NO"."""
         Simply finds first paragraph with financial keywords and returns 1-2 sentences.
         """
         try:
-            logger.info(f"   📝 Searching for financial content...")
+            logger.info(f"    Searching for financial content...")
 
             # Split text into lines
             lines = article_text.split('\n')
@@ -889,7 +903,7 @@ Answer ONLY "YES" or "NO"."""
                 if any(keyword in line_lower for keyword in financial_keywords):
                     # Check if contains numbers (likely data)
                     if re.search(r'\d+', line):
-                        logger.info(f"   ✅ Found financial content")
+                        logger.info(f"    Found financial content")
 
                         # Extract first 1-2 sentences
                         sentences = [s.strip() for s in re.split(r'[.!?]+', line) if s.strip()]
@@ -902,15 +916,15 @@ Answer ONLY "YES" or "NO"."""
                         if len(description) > 300:
                             description = description[:297] + '...'
 
-                        logger.info(f"   📄 Description: {description[:100]}...")
+                        logger.info(f"    Description: {description[:100]}...")
                         return description
 
-            logger.warning(f"   ⚠️ No financial content found with strict filters")
-            logger.info(f"   📄 Text preview: {article_text[:500]}...")
+            logger.warning(f"    No financial content found with strict filters")
+            logger.info(f"    Text preview: {article_text[:500]}...")
             return ""
 
         except Exception as e:
-            logger.error(f"   ❌ Text extraction failed: {e}")
+            logger.error(f"    Text extraction failed: {e}")
             return ""
 
     def _ai_select_best_paragraph(self, paragraphs: List[str], search_content: str) -> str:
@@ -924,7 +938,7 @@ Answer ONLY "YES" or "NO"."""
 
             google_api_key = os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
-                logger.error("   ❌ GOOGLE_API_KEY not found - cannot use AI selection")
+                logger.error("    GOOGLE_API_KEY not found - cannot use AI selection")
                 return ""
 
             # Configure Gemini
@@ -980,7 +994,7 @@ Your selection:"""
             if response and response.text:
                 # Extract paragraph number from AI response
                 selection = response.text.strip()
-                logger.info(f"   🤖 AI selected: {selection}")
+                logger.info(f"    AI selected: {selection}")
 
                 # Parse the number
                 match = re.search(r'\d+', selection)
@@ -988,20 +1002,20 @@ Your selection:"""
                     selected_index = int(match.group(0)) - 1  # Convert to 0-indexed
                     if 0 <= selected_index < len(paragraphs_to_analyze):
                         selected_paragraph = paragraphs_to_analyze[selected_index]
-                        logger.info(f"   ✅ Returning paragraph {selected_index + 1}")
+                        logger.info(f"    Returning paragraph {selected_index + 1}")
                         return selected_paragraph
                     else:
-                        logger.warning(f"   ⚠️ AI selected invalid index: {selected_index + 1}")
+                        logger.warning(f"    AI selected invalid index: {selected_index + 1}")
                         return ""
                 else:
-                    logger.warning(f"   ⚠️ Could not parse number from AI response: {selection}")
+                    logger.warning(f"    Could not parse number from AI response: {selection}")
                     return ""
             else:
-                logger.warning(f"   ⚠️ Empty AI response")
+                logger.warning(f"  Empty AI response")
                 return ""
 
         except Exception as e:
-            logger.error(f"   ❌ AI selection failed: {e}")
+            logger.error(f" AI selection failed: {e}")
             return ""
 
     def _extract_keywords(self, content: str) -> List[str]:
@@ -1068,7 +1082,7 @@ Your selection:"""
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(image_results_data, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"💾 Saved {len(extracted_images)} image results to: {filepath}")
+            logger.info(f" Saved {len(extracted_images)} image results to: {filepath}")
             return str(filepath)
 
         except Exception as e:

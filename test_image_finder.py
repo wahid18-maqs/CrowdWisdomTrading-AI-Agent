@@ -23,7 +23,7 @@ print("="*80)
 print()
 
 # Use latest CNBC URL
-test_url = "https://www.cnbc.com/2025/10/16/stock-market-today-live-updates.html"
+test_url = "https://www.cnbc.com/2025/10/20/stock-market-today-live-updates.html"
 
 print(f"🎯 Testing with CNBC URL:")
 print(f"   {test_url}")
@@ -83,7 +83,6 @@ print()
 try:
     result = image_finder._run(
         search_content=search_content,
-        mentioned_stocks=["RUT", "SPX", "DJI", "IXIC"],
         max_images=1,
         search_results_file=str(test_results_file)
     )

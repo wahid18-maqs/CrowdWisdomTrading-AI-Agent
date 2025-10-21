@@ -301,7 +301,6 @@ class EnhancedTelegramSender(BaseTool):
 
             image_input = ImageFinderInput(
                 search_content=search_content,
-                mentioned_stocks=stocks,
                 max_images=3,
                 search_results_file=search_results_file
             )
