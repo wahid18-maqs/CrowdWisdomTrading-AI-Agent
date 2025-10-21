@@ -86,7 +86,7 @@ class TavilyTools(BaseTool):
                 search_depth="advanced",
                 include_images=False,
                 include_answer=True,
-                max_results=20,
+                max_results=max_results,
                 time_range="day",  # Search last day, then filter by hours_back
                 include_domains=[
                     "cnbc.com",

@@ -203,12 +203,14 @@ class FinancialMarketCrew:
             - Focus on key market movements, earnings, Fed policy, notable stocks
 
             SEARCH STRATEGY:
-            1. Use tavily_financial_search tool with NO domain restrictions
-            2. Search terms: "US stock market financial news"
-            3. Search timeframe: Last 24 hours (not just 1 hour to ensure results)
-            4. Gather comprehensive news from all available sources
-            5. Store complete results in output folder
-            6. Note the search_results_file path (will be in output/search_results/ folder)
+            1. Use tavily_financial_search tool with these exact parameters:
+               - query: "US stock market financial news"
+               - hours_back: 1
+               - max_results: 20
+            2. Search timeframe: Last 1 hour (Tavily will search 24h, then filter to 1h)
+            3. Gather comprehensive news from all available sources
+            4. Store complete results in output folder
+            5. Note the search_results_file path (will be in output/search_results/ folder)
 
             PHASE 2 - EXTRACT IMAGES:
             After completing the search, use the enhanced_financial_image_finder tool:
