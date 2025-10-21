@@ -247,3 +247,7 @@ videos/
 test_workflow.py
 
 output/
+
+test_image_finder.py
+test_summary_agent.py
+test_tavily_search.py

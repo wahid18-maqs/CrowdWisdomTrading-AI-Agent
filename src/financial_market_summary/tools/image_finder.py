@@ -83,8 +83,6 @@ class EnhancedImageFinder(BaseTool):
             logger.info(f"💾 Saving {len(extracted_images)} image results...")
             self._save_image_results(extracted_images, search_content)
 
-            extracted_images.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-
             logger.info("="*60)
             logger.info(f"✅ IMAGE FINDER COMPLETED: {len(extracted_images)} images")
             logger.info("="*60)
@@ -391,7 +389,6 @@ class EnhancedImageFinder(BaseTool):
                                 'title': f'Financial chart from {urlparse(article_url).netloc}',
                                 'source': urlparse(article_url).netloc,
                                 'type': 'screenshot',
-                                'relevance_score': 95,
                                 'telegram_compatible': True,
                                 'file_type': 'png',
                                 'trusted_source': True,
@@ -1060,7 +1057,6 @@ Your selection:"""
                     "extraction_method": img.get('extraction_method', 'unknown'),
                     "file_type": img.get('file_type', 'unknown'),
                     "image_description": img.get('image_description', ''),
-                    "relevance_score": img.get('relevance_score', 0),
                     "telegram_compatible": img.get('telegram_compatible', False),
                     "content_type": img.get('content_type'),
                     "file_size": img.get('file_size'),
