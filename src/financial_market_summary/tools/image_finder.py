@@ -145,31 +145,116 @@ class EnhancedImageFinder(BaseTool):
             logger.error(f"Failed to extract URLs from search results file: {e}")
             return []
 
+    def _ai_should_skip_image(self, image_bytes: bytes, img_alt: str) -> bool:
+        """Use AI to determine if image is a generic photo (traders, buildings) or relevant content"""
+        try:
+            import google.generativeai as genai
+            from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                logger.warning("    No GOOGLE_API_KEY, accepting image by default")
+                return False
+
+            # Configure Gemini
+            genai.configure(api_key=google_api_key)
+            model = genai.GenerativeModel(
+                'gemini-2.0-flash-exp',
+                generation_config={
+                    'temperature': 0.2,
+                    'top_p': 0.95,
+                    'top_k': 40,
+                    'max_output_tokens': 20,
+                }
+            )
+
+            # Load image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+
+            # AI prompt
+            prompt = f"""Look at this image from a financial news article.
+
+Alt text: "{img_alt}"
+
+Question: Is this a CHART or GRAPH showing financial/market data?
+
+SKIP if the image shows:
+- People (traders, executives, workers, anyone)
+- Buildings or offices
+- Products or objects (robots, phones, cars, etc.)
+- Factories or warehouses
+- ANY photograph of real-world scenes
+- Logos or company signs
+
+KEEP ONLY if the image is:
+- A financial chart (line/bar/candlestick chart)
+- A graph with data
+- A data visualization (pie chart, infographic with numbers)
+- Stock market price charts
+- Index performance charts
+
+If you see people, buildings, products, or any real-world photography → say SKIP
+If you see a chart/graph with financial data → say KEEP
+
+Answer ONLY "SKIP" or "KEEP"."""
+
+            response = model.generate_content(
+                [prompt, pil_image],
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
+
+            if response and response.text:
+                answer = response.text.strip().upper()
+                logger.info(f"    AI decision: {answer}")
+                return "SKIP" in answer
+            else:
+                logger.warning(f"    Empty AI response, keeping image")
+                return False
+
+        except Exception as e:
+            logger.error(f"    AI check failed: {e}, keeping image")
+            return False
+
+    def _extract_image_from_img_tag(self, article_url: str) -> Optional[Dict[str, Any]]:
+        """Use existing chart screenshot method but look for <img> tags instead"""
+        # This method now just returns None to use chart fallback
+        # We'll modify the chart screenshot method to look for <img> first
+        return None
+
     def _extract_screenshots_from_urls(self, article_urls: List[str], content: str, max_images: int) -> List[Dict[str, Any]]:
-        """Extract screenshots from provided article URLs"""
+        """Extract images from provided article URLs - tries <img> tags first, screenshots as fallback"""
         extracted_images = []
 
-        # Process ALL article URLs (no limit)
-        max_attempts = len(article_urls)
-        attempts = 0
-        skipped_yahoo = 0
-
-        logger.info(f" Starting screenshot extraction:")
+        logger.info(f" Starting image extraction:")
         logger.info(f"   - Total URLs available: {len(article_urls)}")
-        logger.info(f"   - Will attempt ALL URLs: {max_attempts}")
         logger.info(f"   - Target images: {max_images}")
+        logger.info(f"   - Strategy: <img> tags first, screenshots as fallback")
 
         for idx, url in enumerate(article_urls, 1):
-            # No max_attempts check - will process all URLs until target images reached
-
-            # Allow Yahoo Finance for chart extraction
-            # Yahoo Finance has good charts that we can capture
-
-            attempts += 1
+            if len(extracted_images) >= max_images:
+                logger.info(f" Target images ({max_images}) reached, stopping")
+                break
 
             try:
-                logger.info(f" [{idx}/{len(article_urls)}] Attempt {attempts}/{max_attempts}")
-                logger.info(f"   URL: {url}")
+                logger.info(f" [{idx}/{len(article_urls)}] Processing URL: {url[:80]}...")
+
+                # STEP 1: Try to extract image from <img> tags first
+                logger.info(f"   Step 1: Attempting to extract <img> tag from URL...")
+                img_tag_data = self._extract_image_from_img_tag(url)
+
+                if img_tag_data:
+                    extracted_images.append(img_tag_data)
+                    logger.info(f" Image extracted from <img> tag successfully!")
+                    logger.info(f"   Image URL: {img_tag_data.get('url', 'unknown')[:80]}...")
+                    continue
+
+                # STEP 2: Fallback to screenshot capture if no <img> tag found
+                logger.info(f"   Step 2: No suitable <img> tag found, falling back to screenshot...")
                 screenshot_data = self._capture_chart_screenshot(url)
 
                 if screenshot_data:
@@ -177,21 +262,15 @@ class EnhancedImageFinder(BaseTool):
                     logger.info(f" Screenshot captured successfully!")
                     logger.info(f"   Saved to: {screenshot_data.get('url', 'unknown')}")
                 else:
-                    logger.warning(f" Screenshot capture returned None for {url[:80]}...")
-
-                if len(extracted_images) >= max_images:
-                    logger.info(f" Target images ({max_images}) reached, stopping")
-                    break
+                    logger.warning(f" Both <img> tag and screenshot extraction failed for {url[:80]}...")
 
             except Exception as e:
-                logger.error(f" Exception during screenshot from {url[:80]}...: {e}", exc_info=True)
+                logger.error(f" Exception during image extraction from {url[:80]}...: {e}", exc_info=True)
                 continue
 
-        logger.info(f" Screenshot extraction summary:")
+        logger.info(f" Image extraction summary:")
         logger.info(f"   - URLs processed: {idx}")
-        logger.info(f"   - Yahoo Finance skipped: {skipped_yahoo}")
-        logger.info(f"   - Screenshot attempts: {attempts}")
-        logger.info(f"   - Images captured: {len(extracted_images)}")
+        logger.info(f"   - Images extracted: {len(extracted_images)}")
 
         return extracted_images
 
@@ -299,8 +378,91 @@ class EnhancedImageFinder(BaseTool):
 
                 screenshot_data = None
 
-                # Search for chart elements on page
-                logger.info(f" Searching for chart elements on page...")
+                # FIRST: Try to find and screenshot <img> tags (skip first one)
+                logger.info(f" STEP 1: Looking for <img> tags first...")
+                try:
+                    img_elements = page.query_selector_all('img')
+                    logger.info(f"   Found {len(img_elements)} <img> elements")
+
+                    large_images_found = 0
+                    for idx, img_elem in enumerate(img_elements):
+                        box = img_elem.bounding_box()
+                        if box and box['width'] >= 400 and box['height'] >= 250:
+                            large_images_found += 1
+
+                            # Skip first large image
+                            if large_images_found == 1:
+                                logger.info(f"   Skipping first large image (usually header)")
+                                continue
+
+                            # Take second large image
+                            logger.info(f"   Found second large image ({box['width']}x{box['height']}), capturing...")
+                            try:
+                                # Try to screenshot parent container to capture captions/logos
+                                screenshot_elem = img_elem
+
+                                # Check if parent is figure, picture, or container div
+                                parent = img_elem.evaluate('el => el.parentElement')
+                                if parent:
+                                    parent_elem = img_elem.evaluate_handle('el => el.parentElement')
+                                    parent_tag = parent_elem.evaluate('el => el.tagName.toLowerCase()')
+
+                                    # Use parent if it's a semantic container
+                                    if parent_tag in ['figure', 'picture', 'article']:
+                                        screenshot_elem = parent_elem
+                                        logger.info(f"   Capturing parent <{parent_tag}> container (includes captions/logos)")
+                                    else:
+                                        logger.info(f"   Capturing <img> element directly")
+
+                                screenshot_elem.scroll_into_view_if_needed(timeout=5000)
+                                page.wait_for_timeout(2000)
+                                screenshot_bytes = screenshot_elem.screenshot(timeout=10000)
+
+                                # Save it
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
+                                filename = f"img_{domain}_{timestamp}.png"
+
+                                project_root = Path(__file__).resolve().parent.parent.parent.parent
+                                screenshots_dir = project_root / "output" / "screenshots"
+                                screenshots_dir.mkdir(parents=True, exist_ok=True)
+                                filepath = screenshots_dir / filename
+
+                                with open(filepath, 'wb') as f:
+                                    f.write(screenshot_bytes)
+
+                                logger.info(f" ✅ Image captured successfully from <img> tag!")
+
+                                screenshot_data = {
+                                    'url': str(filepath).replace('\\', '/'),
+                                    'title': self._extract_h1_from_url(article_url),
+                                    'source': urlparse(article_url).netloc,
+                                    'type': 'img_tag_screenshot',
+                                    'telegram_compatible': True,
+                                    'file_type': 'png',
+                                    'trusted_source': True,
+                                    'extraction_method': 'img_tag_screenshot',
+                                    'source_article': article_url,
+                                    'image_description': '',
+                                    'content_type': 'image/png',
+                                    'file_size': str(len(screenshot_bytes)),
+                                }
+
+                                context.close()
+                                browser.close()
+                                return screenshot_data
+
+                            except Exception as img_error:
+                                logger.warning(f"   Failed to capture <img>: {img_error}")
+                                continue
+
+                    logger.info(f" No suitable <img> tags found, falling back to chart selectors...")
+
+                except Exception as e:
+                    logger.warning(f" <img> tag search failed: {e}, trying chart selectors...")
+
+                # STEP 2: Fallback to chart selectors
+                logger.info(f" STEP 2: Searching for chart elements...")
 
                 # Find chart elements - prioritize containers that include labels/legends
                 chart_selectors = [
