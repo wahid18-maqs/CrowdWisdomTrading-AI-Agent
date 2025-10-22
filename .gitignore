@@ -248,6 +248,6 @@ test_workflow.py
 
 output/
 
-test_image_finder.py
-test_summary_agent.py
-test_tavily_search.py
+test_image.py
+test_summary.py
+test_tavily.py

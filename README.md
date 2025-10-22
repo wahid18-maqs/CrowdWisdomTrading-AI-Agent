@@ -133,6 +133,14 @@ TELEGRAM_CHAT_ID_GERMAN=your_german_chat_id_here
 python -m src.financial_market_summary.main
 ```
 
+### Testing
+
+To run the test suite:
+
+```bash
+pytest -v
+```
+
 ### Expected Execution Times
 
 - **Free Tier APIs**: 8-12 minutes (conservative rate limiting)
