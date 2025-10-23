@@ -229,10 +229,27 @@ class FinancialMarketCrew:
             - Generate both: short image caption (with emojis) + full comprehensive summary
 
             TWO-MESSAGE FORMAT REQUIREMENTS:
-            1. Message 1 (Image Caption): Short, engaging caption with image description (≤150 words, ≤1024 chars)
-               - Include clear description of the financial image/chart being shown
-               - Explain what the image represents and its relevance to the news
-               - End with "Full summary below ⬇️"
+            1. Message 1 (ENGAGING HOOK): Create an attention-grabbing hook from image description (≤20 words, ≤1024 chars)
+
+               CRITICAL - TRANSFORM IMAGE DESCRIPTION INTO ENGAGING HOOK:
+               - Use the AI-extracted image description from Phase 2
+               - Transform it into a compelling hook that makes users STOP scrolling
+               - Create curiosity and urgency: "Markets just shifted dramatically...", "Breaking: Major move in..."
+               - Highlight the most dramatic/interesting aspect
+               - Use power words: "surged", "plunged", "breaking", "historic", "unexpected", "dramatic"
+               - Ask a compelling question OR state a surprising fact
+               - Add relevant emojis (⚠️ 🚀 ⚡ 📈 📉 💰)
+               - End with "Full breakdown 👇" or "What's happening? 👇"
+
+               HOOK EXAMPLES (≤20 WORDS):
+               Original: "Wednesday's slide in major averages was led by the Dow Jones..."
+               Hook: "⚠️ Dow plunges 234 points! What's triggering the sell-off? 👇" (9 words)
+
+               Original: "The S&P 500 rose 1.2% to close at 5,850.23..."
+               Hook: "🚀 S&P 500 surges to 5,850 - best session in weeks! What's fueling this? 👇" (14 words)
+
+               Original: "Tesla shares tumbled 8% following weak delivery figures..."
+               Hook: "⚡ Tesla crashes 8% on weak deliveries! The shocking reason 👇" (10 words)
 
             2. Message 2 (Full Summary): Write a comprehensive market summary (≤250 words)
                - **TITLE**: Create a dynamic, engaging title based on the day's main market theme
@@ -379,7 +396,7 @@ class FinancialMarketCrew:
                     ORIGINAL CONTENT:
                     {summary_content}
 
-                    STEP 1 - TRANSLATE:
+                    STEP 1 - TRANSLATE WITH ENGAGING HOOK:
                     Call the financial_translator tool with BOTH required parameters:
                     {{
                         "content": "{summary_content[:100]}...[FULL CONTENT HERE]",
@@ -390,14 +407,22 @@ class FinancialMarketCrew:
                     - content: The full original content above (including === TELEGRAM_TWO_MESSAGE_FORMAT === and ---TELEGRAM_IMAGE_DATA--- markers)
                     - target_language: Must be exactly '{language}' (one of: 'arabic', 'hindi', 'hebrew', 'german')
 
+                    ENGAGING HOOK STRATEGY FOR {language.upper()}:
+                    - The Message 1 hook should be culturally relevant and engaging in {language}
+                    - Use {language} power words that create urgency and curiosity
+                    - Adapt the hook style to {language} cultural context
+                    - Keep emojis (⚠️ 🚀 ⚡ 📈 📉 💰) - they work across all languages
+                    - Maintain the compelling question or surprising fact structure
+                    - Keep under 20 words in {language} -  punchy!
+
                     STEP 2 - SEND:
                     After translation, the financial_translator will return translated content in this format:
                     === TELEGRAM_TWO_MESSAGE_FORMAT ===
                     Message 1 (Image Caption):
-                    [translated caption]
+                    [translated engaging hook in {language}]
 
                     Message 2 (Full Summary):
-                    [translated summary]
+                    [translated summary in {language}]
 
                     ---TELEGRAM_IMAGE_DATA---
 
@@ -411,7 +436,8 @@ class FinancialMarketCrew:
                     - Both financial_translator parameters (content AND target_language) are REQUIRED
                     - Do NOT modify the translator output before passing to telegram_sender
                     - Keep ALL format markers (=== and ---) intact
-                    - The language parameter routes to the {language.upper()} bot""",
+                    - The language parameter routes to the {language.upper()} bot
+                    - The translated hook MUST be engaging and culturally appropriate for {language} speakers""",
                     expected_output=f"Confirmation that {language} translation was sent to {language} Telegram bot with both messages (caption and summary).",
                     agent=send_agent
                 )

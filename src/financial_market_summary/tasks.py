@@ -12,7 +12,7 @@ class FinancialTasks:
     def create_all_tasks(self):
         """Create optimized workflow tasks for free financial sources."""
         
-        # Task 1: Search Free Financial News (1-hour enforced)
+        # Task 1: Search Free Financial News
         search_task = Task(
             description="""Search for BREAKING/LIVE US financial news from the past 1 HOUR ONLY using 
             sources.
@@ -80,50 +80,93 @@ class FinancialTasks:
             context=[summary_task]
         )
         
-        # Task 4: Send English version
+        # Task 4: Send English version with engaging hook
         send_english_task = Task(
             description="""Send English version to Telegram using telegram_sender tool with language='english'.
+
+            CRITICAL - CREATE ENGAGING HOOK FROM IMAGE DESCRIPTION:
+            Before sending, transform the image description into an attention-grabbing hook that:
+            1. Creates curiosity and urgency ("Markets just shifted dramatically...", "Breaking: Major move in...")
+            2. Highlights the most dramatic/interesting aspect from the description
+            3. Uses power words: "surged", "plunged", "breaking", "historic", "unexpected", "dramatic"
+            4. Asks a compelling question OR states a surprising fact
+            5. Keeps it under 20 words - ultra punchy and direct
+            6. Makes users want to read the full summary
+
+            EXAMPLES OF GOOD HOOKS (≤20 WORDS):
+            Original: "Wednesday's slide in major averages was led by the Dow Jones..."
+            Hook: "⚠️ Dow plunges 234 points! What's triggering the sell-off? 👇" (9 words)
+
+            Original: "The S&P 500 rose 1.2% to close at 5,850.23..."
+            Hook: "🚀 S&P 500 surges to 5,850 - best session in weeks! What's fueling this? 👇" (14 words)
+
+            Original: "Tesla shares tumbled 8% following weak delivery figures..."
+            Hook: "⚡ Tesla crashes 8% on weak deliveries! The shocking reason 👇" (10 words)
 
             The telegram_sender will automatically:
             - Find latest screenshot from output/screenshots/
             - Extract AI description from image_results JSON
-            - Send Message 1: Image + AI description
+            - Transform description into engaging hook (as specified above)
+            - Send Message 1: Image + Engaging Hook
             - Send Message 2: Full summary with charts
-            - Route to English bot if configured""",
-            expected_output="Confirmation English version sent to Telegram.",
+            - Route to English bot if configured
+
+            REMEMBER: The hook should make users STOP scrolling and READ the full summary!""",
+            expected_output="Confirmation English version sent to Telegram with engaging hook that drives readership.",
             agent=self.agents.send_agent(),
             context=[format_task]
         )
 
-        # Task 5: Translate to Arabic and send
+        # Task 5: Translate to Arabic and send with engaging hook
         translate_arabic_task = Task(
             description="""1. Use financial_translator tool to translate content to Arabic
             2. Use telegram_sender tool with language='arabic' to send to Arabic bot
 
+            ENGAGING HOOK STRATEGY (same as English):
+            - Transform image description into attention-grabbing Arabic hook
+            - Use Arabic power words and cultural relevance
+            - Create urgency and curiosity in Arabic style
+            - Keep under 20 words in Arabic -  punchy!
+            - Add relevant emojis (⚠️ 🚀 ⚡ 📈 📉 💰)
+
             CRITICAL: Preserve stock symbols, numbers, HTML tags, and two-message format.""",
-            expected_output="Arabic translation sent to Arabic Telegram bot.",
+            expected_output="Arabic translation sent to Arabic Telegram bot with engaging hook.",
             agent=self.agents.send_agent(),
             context=[format_task]
         )
 
-        # Task 6: Translate to Hindi and send
+        # Task 6: Translate to Hindi and send with engaging hook
         translate_hindi_task = Task(
             description="""1. Use financial_translator tool to translate content to Hindi
             2. Use telegram_sender tool with language='hindi' to send to Hindi bot
 
+            ENGAGING HOOK STRATEGY (same as English):
+            - Transform image description into attention-grabbing Hindi hook
+            - Use Hindi power words and cultural relevance
+            - Create urgency and curiosity in Hindi style
+            - Keep under 20 words in Hindi -  punchy!
+            - Add relevant emojis (⚠️ 🚀 ⚡ 📈 📉 💰)
+
             CRITICAL: Preserve stock symbols, numbers, HTML tags, and two-message format.""",
-            expected_output="Hindi translation sent to Hindi Telegram bot.",
+            expected_output="Hindi translation sent to Hindi Telegram bot with engaging hook.",
             agent=self.agents.send_agent(),
             context=[format_task]
         )
 
-        # Task 7: Translate to Hebrew and send
+        # Task 7: Translate to Hebrew and send with engaging hook
         translate_hebrew_task = Task(
             description="""1. Use financial_translator tool to translate content to Hebrew
             2. Use telegram_sender tool with language='hebrew' to send to Hebrew bot
 
+            ENGAGING HOOK STRATEGY (same as English):
+            - Transform image description into attention-grabbing Hebrew hook
+            - Use Hebrew power words and cultural relevance
+            - Create urgency and curiosity in Hebrew style
+            - Keep under 20 words in Hebrew -  punchy!
+            - Add relevant emojis (⚠️ 🚀 ⚡ 📈 📉 💰)
+
             CRITICAL: Preserve stock symbols, numbers, HTML tags, and two-message format.""",
-            expected_output="Hebrew translation sent to Hebrew Telegram bot.",
+            expected_output="Hebrew translation sent to Hebrew Telegram bot with engaging hook.",
             agent=self.agents.send_agent(),
             context=[format_task]
         )

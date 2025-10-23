@@ -65,10 +65,10 @@ class EnhancedImageFinder(BaseTool):
                 logger.warning(" No screenshots were captured from any URLs")
                 return json.dumps([], indent=2)
 
-            # Extract descriptions from article URLs (web scraping, NO AI)
-            logger.info(f" Extracting descriptions from article URLs for {len(extracted_images)} images...")
+            # Check descriptions from <p> tags (already extracted during capture)
+            logger.info(f" Verifying descriptions for {len(extracted_images)} images...")
             extracted_images = self._generate_ai_descriptions(extracted_images, search_content)
-            logger.info(f" Descriptions extracted from URLs")
+            logger.info(f" Description check complete")
 
             # Save and return
             logger.info(f" Saving {len(extracted_images)} image results...")
@@ -376,85 +376,148 @@ Answer ONLY "SKIP" or "KEEP"."""
                 page.wait_for_timeout(15000)  # Increased from 8s to 15s for live data
                 logger.info(f" Chart rendering wait complete")
 
+                # Scroll back to top to ensure top images are visible
+                logger.info(f" Scrolling back to top to load header images...")
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(3000)  # Wait for top images to load
+                logger.info(f" Scrolled to top, images should be visible now")
+
                 screenshot_data = None
 
-                # FIRST: Try to find and screenshot <img> tags (skip first one)
-                logger.info(f" STEP 1: Looking for <img> tags first...")
+                # FIRST: Try to find and screenshot <img> tags (prioritize actual images)
+                logger.info(f" STEP 1: Looking for <img> tags (not charts)...")
                 try:
                     img_elements = page.query_selector_all('img')
-                    logger.info(f"   Found {len(img_elements)} <img> elements")
+                    logger.info(f"   Found {len(img_elements)} <img> elements total")
 
+                    # Filter out chart images - look for actual content images
+                    # Check src or parent attributes to identify chart vs content images
                     large_images_found = 0
                     for idx, img_elem in enumerate(img_elements):
                         box = img_elem.bounding_box()
-                        if box and box['width'] >= 400 and box['height'] >= 250:
-                            large_images_found += 1
+                        if not box or box['width'] < 400 or box['height'] < 250:
+                            continue
 
-                            # Skip first large image
-                            if large_images_found == 1:
-                                logger.info(f"   Skipping first large image (usually header)")
+                        large_images_found += 1
+
+                        # Check if this is a chart image (skip it if so)
+                        try:
+                            img_src = img_elem.get_attribute('src') or ''
+                            img_class = img_elem.get_attribute('class') or ''
+                            img_alt = img_elem.get_attribute('alt') or ''
+
+                            # Skip if it looks like a chart/graph image
+                            is_chart = any(keyword in (img_src + img_class + img_alt).lower()
+                                        for keyword in ['chart', 'graph', 'tradingview', 'finviz', 'stockcharts'])
+
+                            if is_chart:
+                                logger.info(f"   Skipping chart image #{large_images_found} (detected chart keywords)")
                                 continue
+                        except:
+                            pass
 
-                            # Take second large image
-                            logger.info(f"   Found second large image ({box['width']}x{box['height']}), capturing...")
+                        # Skip first large non-chart image (usually header/logo)
+                        if large_images_found == 1:
+                            logger.info(f"   Skipping first large image #{large_images_found} (usually header)")
+                            continue
+
+                        # Take second large non-chart image
+                        logger.info(f"   Found second large image ({box['width']}x{box['height']}), capturing...")
+                        try:
+                            # Try to screenshot parent container to capture captions/logos
+                            screenshot_elem = img_elem
+
+                            # Check if parent is figure, picture, or container div
+                            parent = img_elem.evaluate('el => el.parentElement')
+                            if parent:
+                                parent_elem = img_elem.evaluate_handle('el => el.parentElement')
+                                parent_tag = parent_elem.evaluate('el => el.tagName.toLowerCase()')
+
+                                # Use parent if it's a semantic container
+                                if parent_tag in ['figure', 'picture', 'article']:
+                                    screenshot_elem = parent_elem
+                                    logger.info(f"   Capturing parent <{parent_tag}> container (includes captions/logos)")
+                                else:
+                                    logger.info(f"   Capturing <img> element directly")
+
+                            screenshot_elem.scroll_into_view_if_needed(timeout=5000)
+                            page.wait_for_timeout(2000)
+                            screenshot_bytes = screenshot_elem.screenshot(timeout=10000)
+
+                            # Extract <p> tag below the <img> as fallback description
+                            fallback_description = ''
                             try:
-                                # Try to screenshot parent container to capture captions/logos
-                                screenshot_elem = img_elem
+                                # Try to find <p> tag that comes after the <img> element
+                                next_p = img_elem.evaluate('''(element) => {
+                                    // Get the parent of the img
+                                    let parent = element.parentElement;
 
-                                # Check if parent is figure, picture, or container div
-                                parent = img_elem.evaluate('el => el.parentElement')
-                                if parent:
-                                    parent_elem = img_elem.evaluate_handle('el => el.parentElement')
-                                    parent_tag = parent_elem.evaluate('el => el.tagName.toLowerCase()')
+                                    // Look for <p> in siblings or parent's siblings
+                                    let current = element;
+                                    while (current) {
+                                        let nextSibling = current.nextElementSibling;
+                                        if (nextSibling) {
+                                            if (nextSibling.tagName.toLowerCase() === 'p') {
+                                                return nextSibling.textContent.trim();
+                                            }
+                                            // Check if next sibling contains a <p>
+                                            let p = nextSibling.querySelector('p');
+                                            if (p) {
+                                                return p.textContent.trim();
+                                            }
+                                        }
+                                        current = current.parentElement;
+                                        if (!current || current.tagName.toLowerCase() === 'body') break;
+                                    }
+                                    return '';
+                                }''')
 
-                                    # Use parent if it's a semantic container
-                                    if parent_tag in ['figure', 'picture', 'article']:
-                                        screenshot_elem = parent_elem
-                                        logger.info(f"   Capturing parent <{parent_tag}> container (includes captions/logos)")
-                                    else:
-                                        logger.info(f"   Capturing <img> element directly")
+                                if next_p and len(next_p) > 20:
+                                    fallback_description = next_p
+                                    logger.info(f"   Extracted <p> tag below image: {fallback_description[:100]}...")
+                                else:
+                                    logger.info(f"   No suitable <p> tag found below image")
 
-                                screenshot_elem.scroll_into_view_if_needed(timeout=5000)
-                                page.wait_for_timeout(2000)
-                                screenshot_bytes = screenshot_elem.screenshot(timeout=10000)
+                            except Exception as p_error:
+                                logger.warning(f"   Failed to extract <p> tag: {p_error}")
 
-                                # Save it
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
-                                filename = f"img_{domain}_{timestamp}.png"
+                            # Save it
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
+                            filename = f"img_{domain}_{timestamp}.png"
 
-                                project_root = Path(__file__).resolve().parent.parent.parent.parent
-                                screenshots_dir = project_root / "output" / "screenshots"
-                                screenshots_dir.mkdir(parents=True, exist_ok=True)
-                                filepath = screenshots_dir / filename
+                            project_root = Path(__file__).resolve().parent.parent.parent.parent
+                            screenshots_dir = project_root / "output" / "screenshots"
+                            screenshots_dir.mkdir(parents=True, exist_ok=True)
+                            filepath = screenshots_dir / filename
 
-                                with open(filepath, 'wb') as f:
-                                    f.write(screenshot_bytes)
+                            with open(filepath, 'wb') as f:
+                                f.write(screenshot_bytes)
 
-                                logger.info(f" ✅ Image captured successfully from <img> tag!")
+                            logger.info(f" ✅ Image captured successfully from <img> tag!")
 
-                                screenshot_data = {
-                                    'url': str(filepath).replace('\\', '/'),
-                                    'title': self._extract_h1_from_url(article_url),
-                                    'source': urlparse(article_url).netloc,
-                                    'type': 'img_tag_screenshot',
-                                    'telegram_compatible': True,
-                                    'file_type': 'png',
-                                    'trusted_source': True,
-                                    'extraction_method': 'img_tag_screenshot',
-                                    'source_article': article_url,
-                                    'image_description': '',
-                                    'content_type': 'image/png',
-                                    'file_size': str(len(screenshot_bytes)),
-                                }
+                            screenshot_data = {
+                                'url': str(filepath).replace('\\', '/'),
+                                'title': self._extract_h1_from_url(article_url),
+                                'source': urlparse(article_url).netloc,
+                                'type': 'img_tag_screenshot',
+                                'telegram_compatible': True,
+                                'file_type': 'png',
+                                'trusted_source': True,
+                                'extraction_method': 'img_tag_screenshot',
+                                'source_article': article_url,
+                                'image_description': fallback_description,
+                                'content_type': 'image/png',
+                                'file_size': str(len(screenshot_bytes)),
+                            }
 
-                                context.close()
-                                browser.close()
-                                return screenshot_data
+                            context.close()
+                            browser.close()
+                            return screenshot_data
 
-                            except Exception as img_error:
-                                logger.warning(f"   Failed to capture <img>: {img_error}")
-                                continue
+                        except Exception as img_error:
+                            logger.warning(f"   Failed to capture <img>: {img_error}")
+                            continue
 
                     logger.info(f" No suitable <img> tags found, falling back to chart selectors...")
 
@@ -600,116 +663,118 @@ Answer ONLY "SKIP" or "KEEP"."""
             return None
 
     def _generate_ai_descriptions(self, extracted_images: List[Dict[str, Any]], search_content: str) -> List[Dict[str, Any]]:
-        """Extract descriptions using Crawl4AI + AI selection"""
+        """Generate descriptions: Use <p> tags for img screenshots, AI analysis for chart screenshots"""
         try:
-            logger.info(f" Extracting descriptions using Crawl4AI for {len(extracted_images)} images")
+            logger.info(f" Processing descriptions for {len(extracted_images)} images")
 
-            for img in extracted_images:
-                try:
+            for idx, img in enumerate(extracted_images, 1):
+                extraction_method = img.get('extraction_method', '')
+                img_type = img.get('type', '')
+
+                # Check if description already exists (from <p> tag during img capture)
+                existing_description = img.get('image_description', '')
+
+                if existing_description:
+                    # Already has description from <p> tag (img_tag_screenshot)
+                    logger.info(f" [{idx}/{len(extracted_images)}] ✓ Using <p> tag: {existing_description[:100]}...")
+                    continue
+
+                # No description yet - this is a chart screenshot fallback
+                if img_type == 'screenshot' or 'chart' in extraction_method.lower():
+                    logger.info(f" [{idx}/{len(extracted_images)}] Chart screenshot detected - using AI analysis")
+
                     source_article = img.get('source_article', '')
                     if not source_article:
-                        logger.error(f" No source article URL - skipping")
+                        logger.warning(f" [{idx}/{len(extracted_images)}] No source article URL")
                         img['image_description'] = ''
                         continue
 
-                    logger.info(f" Crawling article: {source_article[:80]}...")
+                    try:
+                        # Crawl article to get paragraphs
+                        logger.info(f" [{idx}/{len(extracted_images)}] Crawling article for chart description...")
+                        paragraphs = self._crawl_article_with_crawl4ai(source_article)
 
-                    # Use Crawl4AI to extract paragraphs from <p> tags
-                    paragraphs = self._crawl_article_with_crawl4ai(source_article)
-
-                    if not paragraphs:
-                        logger.error(f" Crawl4AI could not extract paragraphs")
-                        img['image_description'] = ''
-                        continue
-
-                    logger.info(f" Crawl4AI extracted {len(paragraphs)} paragraphs")
-
-                    # Use AI to select which paragraph describes the chart
-                    image_path = img.get('url', '')
-                    if image_path and os.path.exists(image_path):
-                        logger.info(f"    Using AI to select chart description from <p> tags...")
-                        description = self._ai_extract_chart_description(image_path, paragraphs)
-
-                        if description:
-                            img['image_description'] = description
-                            logger.info(f" AI extracted description: {description[:100]}...")
-                        else:
-                            logger.error(f" AI could not extract chart description")
+                        if not paragraphs:
+                            logger.warning(f" [{idx}/{len(extracted_images)}] No paragraphs extracted")
                             img['image_description'] = ''
-                    else:
-                        logger.error(f" Image file not found")
+                            continue
+
+                        logger.info(f" [{idx}/{len(extracted_images)}] Extracted {len(paragraphs)} paragraphs")
+
+                        # Use AI to match chart to paragraph
+                        image_path = img.get('url', '')
+                        if image_path and os.path.exists(image_path):
+                            description = self._ai_extract_chart_description(image_path, paragraphs)
+
+                            if description:
+                                img['image_description'] = description
+                                logger.info(f" [{idx}/{len(extracted_images)}] ✓ AI description: {description[:100]}...")
+                            else:
+                                logger.warning(f" [{idx}/{len(extracted_images)}] ✗ AI could not extract description")
+                                img['image_description'] = ''
+                        else:
+                            logger.warning(f" [{idx}/{len(extracted_images)}] Image file not found")
+                            img['image_description'] = ''
+
+                        time.sleep(0.5)  # Rate limiting
+
+                    except Exception as e:
+                        logger.error(f" [{idx}/{len(extracted_images)}] Chart description failed: {e}")
                         img['image_description'] = ''
-
-                    # Small delay to avoid rate limits
-                    time.sleep(0.5)
-
-                except Exception as e:
-                    logger.error(f" Description extraction failed: {e}")
+                        continue
+                else:
+                    # Unknown type without description
+                    logger.warning(f" [{idx}/{len(extracted_images)}] ✗ No description for type: {img_type}")
                     img['image_description'] = ''
-                    continue
 
             return extracted_images
 
         except Exception as e:
-            logger.error(f" Description extraction system failed: {e}")
+            logger.error(f" Description generation failed: {e}")
             return extracted_images
 
     def _crawl_article_with_crawl4ai(self, article_url: str) -> List[str]:
-        """
-        Use Crawl4AI to extract article HTML, then parse <p> tags with BeautifulSoup.
-        Returns list of paragraph texts from the article.
-        """
+        """Use Crawl4AI to extract article paragraphs - only for chart fallback"""
         try:
             import asyncio
             from crawl4ai import AsyncWebCrawler
 
-            logger.info(f"    Crawl4AI crawling URL...")
+            logger.info(f"    Crawl4AI crawling URL for chart description...")
 
-            # Define async function to crawl
             async def crawl():
                 async with AsyncWebCrawler(verbose=False) as crawler:
                     result = await crawler.arun(url=article_url)
                     return result
 
-            # Run async function
             result = asyncio.run(crawl())
 
             if result.success:
-                # Get HTML content (prefer cleaned_html, fallback to html)
                 html_content = ""
-
                 if hasattr(result, 'cleaned_html') and result.cleaned_html:
                     html_content = result.cleaned_html
-                    logger.info(f"    Using cleaned_html")
                 elif hasattr(result, 'html') and result.html:
                     html_content = result.html
-                    logger.info(f"    Using raw html")
                 else:
                     logger.error(f"    No HTML content available")
                     return []
 
                 logger.info(f"    Crawl4AI success: {len(html_content)} chars")
 
-                # Parse HTML with BeautifulSoup to extract <p> tags
+                # Parse HTML with BeautifulSoup
                 soup = BeautifulSoup(html_content, 'html.parser')
-
-                # Extract all <p> tags
                 paragraphs = soup.find_all('p')
                 logger.info(f"    Found {len(paragraphs)} <p> tags")
 
-                # Extract text from <p> tags and filter
+                # Extract and filter paragraph texts
                 paragraph_texts = []
                 for p in paragraphs:
                     text = p.get_text(strip=True)
-
-                    # Filter out short/irrelevant paragraphs
-                    if len(text) < 80:  # Skip short paragraphs
+                    if len(text) < 80:
+                        continue
+                    if text.count(' ') < 10:
                         continue
 
-                    if text.count(' ') < 10:  # Skip if not enough words
-                        continue
-
-                    # Must contain financial keywords (relaxed filter)
+                    # Financial keywords filter
                     text_lower = text.lower()
                     financial_keywords = [
                         'stock', 'market', 'index', 'dow', 'nasdaq', 's&p', 'djia',
@@ -717,22 +782,17 @@ Answer ONLY "SKIP" or "KEEP"."""
                         'shares', 'trading', 'investors', 'wall street', 'treasury',
                         'futures', 'bond', 'yield', 'rally', 'price', 'earnings',
                         'revenue', 'profit', 'loss', 'up', 'down', 'higher', 'lower',
-                        'popped', 'jumped', 'dropped', 'year', 'quarter', 'friday'
+                        'popped', 'jumped', 'dropped', 'year', 'quarter'
                     ]
 
                     if any(keyword in text_lower for keyword in financial_keywords):
                         paragraph_texts.append(text)
 
                 logger.info(f"    Extracted {len(paragraph_texts)} relevant paragraphs")
-
-                if paragraph_texts:
-                    logger.info(f"    First paragraph preview: {paragraph_texts[0][:150]}...")
-
                 return paragraph_texts
 
             else:
-                error_msg = result.error_message if hasattr(result, 'error_message') else 'Unknown error'
-                logger.error(f"    Crawl4AI failed: {error_msg}")
+                logger.error(f"    Crawl4AI failed")
                 return []
 
         except Exception as e:
@@ -740,23 +800,16 @@ Answer ONLY "SKIP" or "KEEP"."""
             return []
 
     def _ai_extract_chart_description(self, image_path: str, paragraphs: List[str]) -> str:
-        """
-        Use AI to look at the chart image and article paragraphs (from <p> tags),
-        then select which paragraph (or 1-2 sentences from it) describes this chart.
-
-        CRITICAL: AI ONLY SELECTS existing text from paragraphs - NO AI-generated content!
-        Returns ACTUAL text from the article, not AI-written descriptions.
-        """
+        """Use AI to match chart image to article paragraphs - only for chart fallback"""
         try:
             import google.generativeai as genai
             from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-            # Check if we have paragraphs
             if not paragraphs or len(paragraphs) == 0:
                 logger.error("    No paragraphs provided")
                 return ""
 
-            logger.info(f"    Analyzing {len(paragraphs)} paragraphs from <p> tags...")
+            logger.info(f"    Analyzing {len(paragraphs)} paragraphs for chart...")
 
             google_api_key = os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
@@ -784,33 +837,27 @@ Answer ONLY "SKIP" or "KEEP"."""
                 rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
                 pil_image = rgb_image
 
-            # Prepare paragraphs for AI - number them
-            # Use all paragraphs (Gemini 2.0 can handle more context)
-            paragraphs_to_analyze = paragraphs  # Use ALL paragraphs for better matching
+            # Prepare paragraphs
             numbered_paragraphs = []
-            for i, para in enumerate(paragraphs_to_analyze, 1):
-                # Truncate if too long
+            for i, para in enumerate(paragraphs[:20], 1):  # Limit to 20
                 para_text = para[:300] + "..." if len(para) > 300 else para
                 numbered_paragraphs.append(f"{i}. {para_text}")
-
             paragraphs_text = "\n\n".join(numbered_paragraphs)
 
-            logger.info(f"    First paragraph: {paragraphs_to_analyze[0][:150]}...")
+            # STEP 1: Analyze chart
+            logger.info(f"    Step 1: Analyzing chart image...")
+            chart_analysis_prompt = """Analyze this financial chart and describe what it shows.
 
-            # STEP 1: First, analyze the chart to understand what it shows
-            logger.info(f"    Step 1: Analyzing chart image to identify content...")
-            chart_analysis_prompt = """Analyze this financial chart image and describe what it shows.
+IDENTIFY:
+1. Which stock/index? (S&P 500, Dow Jones, Nasdaq, specific stocks)
+2. Chart type? (line, candlestick, bar)
+3. Time period? (intraday, daily, weekly, monthly, yearly)
+4. Trend? (up, down, sideways, volatile)
+5. Price levels or percentages visible?
 
-WHAT TO IDENTIFY:
-1. Which market indices or stocks are shown? (S&P 500, Dow Jones, Nasdaq, Russell 2000, specific stocks, etc.)
-2. What is the chart type? (line chart, candlestick, bar chart, etc.)
-3. What time period? (intraday, daily, weekly, monthly, yearly)
-4. What is the trend? (up, down, sideways, volatile)
-5. Are there any specific price levels or percentages visible?
+Provide 2-3 sentence analysis."""
 
-Provide a brief 2-3 sentence analysis of what this chart displays."""
-
-            chart_analysis_response = model.generate_content(
+            chart_response = model.generate_content(
                 [chart_analysis_prompt, pil_image],
                 safety_settings={
                     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -821,56 +868,12 @@ Provide a brief 2-3 sentence analysis of what this chart displays."""
             )
 
             chart_understanding = ""
-            if chart_analysis_response and chart_analysis_response.text:
-                chart_understanding = chart_analysis_response.text.strip()
+            if chart_response and chart_response.text:
+                chart_understanding = chart_response.text.strip()
                 logger.info(f"    Chart analysis: {chart_understanding[:150]}...")
-            else:
-                logger.warning(f"    Could not analyze chart, proceeding without analysis")
 
-            # STEP 2: Pre-filter paragraphs that might mention the stock/company
-            # Extract stock/company names dynamically from chart analysis
-            stock_keywords = []
-
-            # Extract potential stock symbols (2-5 uppercase letters)
-            import re
-            potential_symbols = re.findall(r'\b[A-Z]{2,5}\b', chart_understanding)
-            stock_keywords.extend(potential_symbols)
-
-            # Extract company names (capitalized words, excluding common words)
-            words = chart_understanding.split()
-            common_words = {'The', 'Chart', 'Stock', 'Company', 'Index', 'Line', 'YTD', 'Here', 'Type'}
-            for word in words:
-                # Capitalized word that's not a common word and longer than 2 chars
-                if word and word[0].isupper() and word not in common_words and len(word) > 2:
-                    # Remove punctuation
-                    clean_word = re.sub(r'[^\w]', '', word)
-                    if clean_word and clean_word not in stock_keywords:
-                        stock_keywords.append(clean_word)
-
-            # Also check for known market indices
-            index_keywords = ['S&P', 'Dow', 'Nasdaq', 'Russell', 'DJIA']
-            for idx in index_keywords:
-                if idx.lower() in chart_understanding.lower():
-                    stock_keywords.append(idx)
-
-            if stock_keywords:
-                logger.info(f"    Pre-filtering for keywords: {stock_keywords}")
-                # Find paragraphs that mention these keywords
-                relevant_indices = []
-                for i, para in enumerate(paragraphs_to_analyze):
-                    if any(keyword.lower() in para.lower() for keyword in stock_keywords):
-                        relevant_indices.append(i)
-
-                if relevant_indices:
-                    logger.info(f"    Found {len(relevant_indices)} paragraphs mentioning {stock_keywords}")
-                    # Prioritize these paragraphs - put them first
-                    prioritized_paragraphs = [paragraphs_to_analyze[i] for i in relevant_indices]
-                    other_paragraphs = [p for i, p in enumerate(paragraphs_to_analyze) if i not in relevant_indices]
-                    paragraphs_to_analyze = prioritized_paragraphs + other_paragraphs[:10]  # Keep some others too
-                    logger.info(f"    Using {len(prioritized_paragraphs)} relevant + {min(10, len(other_paragraphs))} other paragraphs")
-
-            # STEP 3: Now use the chart understanding to select matching paragraph
-            logger.info(f"    Step 3: Using chart analysis to select matching paragraph...")
+            # STEP 2: Match to paragraph
+            logger.info(f"    Step 2: Matching chart to paragraphs...")
             extraction_prompt = f"""CHART SHOWS:
 {chart_understanding}
 
@@ -878,23 +881,20 @@ ARTICLE PARAGRAPHS:
 {paragraphs_text}
 
 TASK:
-Find and COPY the exact text from the paragraphs that describes what's in the chart.
+Find and COPY the exact text that describes this chart.
 
 INSTRUCTIONS:
-1. Look for mentions of the stock/company/index shown in the chart
-2. When you find it, COPY the exact 1-2 sentences that mention it
-3. Return ONLY the copied text - nothing else
-4. If you find nothing, return "NONE"
+1. Look for the stock/company/index shown in the chart
+2. COPY the exact 1-2 sentences that mention it
+3. Return ONLY the copied text
+4. If nothing matches, return "NONE"
 
 EXAMPLE:
-If chart shows "Deere stock" and you find paragraph 7 says "Shares of Deere have popped 8% this year. The stock was last trading marginally higher on Friday"
+Chart shows "Deere stock up 8%"
+Paragraph 7: "Shares of Deere have popped 8% this year. The stock was last trading marginally higher."
+Return EXACTLY: Shares of Deere have popped 8% this year. The stock was last trading marginally higher.
 
-Then return EXACTLY:
-Shares of Deere have popped 8% this year. The stock was last trading marginally higher on Friday
-
-DO NOT return "PARAGRAPH_7" or "SENTENCES_7:" - just return the actual text.
-
-Your response (exact text from article):"""
+Your response (exact text):"""
 
             response = model.generate_content(
                 [extraction_prompt, pil_image],
@@ -910,290 +910,39 @@ Your response (exact text from article):"""
                 ai_response = response.text.strip()
                 logger.info(f"    AI response: {ai_response[:200]}...")
 
-                # Check if AI said NONE
                 if ai_response.upper() == "NONE" or ai_response.upper().startswith("NONE"):
                     logger.warning(f"    AI could not find matching paragraph")
                     return ""
 
-                # AI should have returned the actual text directly
-                # Just clean it up and return it
                 description = ai_response.strip()
-
-                # Ensure it ends with proper punctuation
                 if description and not description.endswith(('.', '!', '?')):
                     description += '.'
 
-                logger.info(f"    AI extracted text: {description[:150]}...")
+                logger.info(f"    ✓ AI extracted: {description[:150]}...")
                 return description
 
-            else:
-                logger.warning(f"    Empty AI response")
-                return ""
+            logger.warning(f"    Empty AI response")
+            return ""
 
         except Exception as e:
             logger.error(f"    AI extraction failed: {e}")
             return ""
 
     def _verify_description_matches_image(self, image_path: str, description: str) -> bool:
-        """
-        Use AI to verify that the description actually matches what's shown in the chart image.
-        Returns True if description is related to the image, False otherwise.
-        """
-        try:
-            import google.generativeai as genai
-            from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-            google_api_key = os.getenv("GOOGLE_API_KEY")
-            if not google_api_key:
-                logger.warning("    GOOGLE_API_KEY not found - skipping verification")
-                return True  # If no API key, accept the description
-
-            # Configure Gemini
-            genai.configure(api_key=google_api_key)
-            model = genai.GenerativeModel(
-                'gemini-2.0-flash-exp',
-                generation_config={
-                    'temperature': 0.2,
-                    'top_p': 0.95,
-                    'top_k': 40,
-                    'max_output_tokens': 50,
-                }
-            )
-
-            # Load image
-            pil_image = Image.open(image_path)
-            if pil_image.mode in ('RGBA', 'LA', 'P'):
-                rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
-                if pil_image.mode == 'P':
-                    pil_image = pil_image.convert('RGBA')
-                rgb_image.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
-                pil_image = rgb_image
-
-            # Verification prompt
-            verification_prompt = f"""Look at this financial chart image and this description:
-
-DESCRIPTION: "{description}"
-
-QUESTION: Does this description accurately describe what is shown in this chart image?
-
-Consider:
-- Does it mention the correct financial instrument/index shown in the chart?
-- Does it describe data/movement that could be from this chart?
-- Is it talking about the same subject as the chart?
-
-Answer ONLY "YES" or "NO"."""
-
-            response = model.generate_content(
-                [verification_prompt, pil_image],
-                safety_settings={
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                }
-            )
-
-            if response and response.text:
-                answer = response.text.strip().upper()
-                logger.info(f"    AI verification: {answer}")
-                return "YES" in answer
-            else:
-                logger.warning(f"    Empty AI response, accepting description")
-                return True
-
-        except Exception as e:
-            logger.error(f"    AI verification failed: {e}")
-            return True  # If verification fails, accept the description
+        """No longer used - descriptions come from <p> tags during image capture"""
+        return True
 
     def _extract_description_from_text(self, article_text: str, search_content: str) -> str:
-        """
-        Extract relevant description from article text.
-        Simply finds first paragraph with financial keywords and returns 1-2 sentences.
-        """
-        try:
-            logger.info(f"    Searching for financial content...")
-
-            # Split text into lines
-            lines = article_text.split('\n')
-
-            # Financial keywords to look for
-            financial_keywords = [
-                'stock', 'market', 'index', 'dow', 'nasdaq', 's&p', 'djia',
-                'rose', 'fell', 'gained', 'declined', 'climbed', 'dropped',
-                'surged', 'plunged', 'rallied', 'tumbled',
-                'up', 'down', 'higher', 'lower',
-                'shares', 'trading', 'points', 'percent', '%',
-                'wall street', 'investors', 'treasury', 'yield'
-            ]
-
-            # Words that indicate headings/titles (to skip)
-            heading_indicators = [
-                'live updates', 'breaking', 'watch', 'read more', 'subscribe',
-                'sign up', 'follow', 'share', 'click here', 'menu', 'search'
-            ]
-
-            # Find first substantial line with financial content
-            for line in lines:
-                line = line.strip()
-
-                # Skip short lines or very long lines
-                if len(line) < 80 or len(line) > 500:
-                    continue
-
-                # Skip navigation/menu items (usually short phrases)
-                if line.count(' ') < 8:  # Increased from 5 to 8 to skip short headings
-                    continue
-
-                # Skip if it looks like a heading
-                line_lower = line.lower()
-                if any(indicator in line_lower for indicator in heading_indicators):
-                    continue
-
-                # Skip if ALL CAPS (likely a heading)
-                if line.isupper():
-                    continue
-
-                # Skip if ends with colon (likely a heading)
-                if line.endswith(':'):
-                    continue
-
-                # Must end with proper punctuation (sentences end with . ! ?)
-                if not line.endswith(('.', '!', '?')):
-                    continue
-
-                # Check if contains financial keywords
-                if any(keyword in line_lower for keyword in financial_keywords):
-                    # Check if contains numbers (likely data)
-                    if re.search(r'\d+', line):
-                        logger.info(f"    Found financial content")
-
-                        # Extract first 1-2 sentences
-                        sentences = [s.strip() for s in re.split(r'[.!?]+', line) if s.strip()]
-                        description = '. '.join(sentences[:2])
-
-                        if not description.endswith('.'):
-                            description += '.'
-
-                        # Limit length
-                        if len(description) > 300:
-                            description = description[:297] + '...'
-
-                        logger.info(f"    Description: {description[:100]}...")
-                        return description
-
-            logger.warning(f"    No financial content found with strict filters")
-            logger.info(f"    Text preview: {article_text[:500]}...")
-            return ""
-
-        except Exception as e:
-            logger.error(f"    Text extraction failed: {e}")
-            return ""
+        """No longer used - descriptions come from <p> tags during image capture"""
+        return ""
 
     def _ai_select_best_paragraph(self, paragraphs: List[str], search_content: str) -> str:
-        """
-        Use AI to intelligently select the most relevant paragraph from the article.
-        AI only selects, does not generate - returns actual paragraph text from website.
-        """
-        try:
-            import google.generativeai as genai
-            from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-            google_api_key = os.getenv("GOOGLE_API_KEY")
-            if not google_api_key:
-                logger.error("    GOOGLE_API_KEY not found - cannot use AI selection")
-                return ""
-
-            # Configure Gemini
-            genai.configure(api_key=google_api_key)
-            model = genai.GenerativeModel(
-                'gemini-2.0-flash-exp',
-                generation_config={
-                    'temperature': 0.3,
-                    'top_p': 0.95,
-                    'top_k': 40,
-                    'max_output_tokens': 100,
-                }
-            )
-
-            # Limit to first 10 paragraphs to avoid token limits
-            paragraphs_to_analyze = paragraphs[:10]
-
-            # Create numbered list of paragraphs for AI
-            numbered_paragraphs = []
-            for i, para in enumerate(paragraphs_to_analyze, 1):
-                # Truncate very long paragraphs
-                para_text = para[:400] + "..." if len(para) > 400 else para
-                numbered_paragraphs.append(f"{i}. {para_text}")
-
-            paragraphs_text = "\n\n".join(numbered_paragraphs)
-
-            # AI prompt - asks AI to select paragraph number, not generate text
-            prompt = f"""You are analyzing a financial news article. Select the BEST paragraph that describes the main financial data or market movement.
-
-Search Context: {search_content[:200]}
-
-Available Paragraphs:
-{paragraphs_text}
-
-INSTRUCTIONS:
-- Select the paragraph number (1-{len(paragraphs_to_analyze)}) that best describes financial market data, stock movements, or trading activity
-- Look for paragraphs with specific numbers, prices, percentages, or market trends
-- Prefer paragraphs that mention indices (S&P 500, Dow, Nasdaq) or specific stocks
-- Return ONLY the number (e.g., "3"), nothing else
-
-Your selection:"""
-
-            response = model.generate_content(
-                prompt,
-                safety_settings={
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                }
-            )
-
-            if response and response.text:
-                # Extract paragraph number from AI response
-                selection = response.text.strip()
-                logger.info(f"    AI selected: {selection}")
-
-                # Parse the number
-                match = re.search(r'\d+', selection)
-                if match:
-                    selected_index = int(match.group(0)) - 1  # Convert to 0-indexed
-                    if 0 <= selected_index < len(paragraphs_to_analyze):
-                        selected_paragraph = paragraphs_to_analyze[selected_index]
-                        logger.info(f"    Returning paragraph {selected_index + 1}")
-                        return selected_paragraph
-                    else:
-                        logger.warning(f"    AI selected invalid index: {selected_index + 1}")
-                        return ""
-                else:
-                    logger.warning(f"    Could not parse number from AI response: {selection}")
-                    return ""
-            else:
-                logger.warning(f"  Empty AI response")
-                return ""
-
-        except Exception as e:
-            logger.error(f" AI selection failed: {e}")
-            return ""
+        """No longer used - descriptions come from <p> tags during image capture"""
+        return ""
 
     def _extract_keywords(self, content: str) -> List[str]:
-        """Extract important keywords from search content"""
-        # Remove common words
-        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-                       'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
-                       'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
-                       'could', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'}
-
-        # Split content and extract meaningful words
-        words = re.findall(r'\b[A-Za-z]{3,}\b', content)
-        keywords = [w for w in words if w.lower() not in common_words]
-
-        # Return unique keywords, limited to first 10
-        return list(dict.fromkeys(keywords))[:10]
+        """No longer used - descriptions come from <p> tags during image capture"""
+        return []
 
     def _save_image_results(self, extracted_images: List[Dict[str, Any]], search_content: str) -> str:
         """Save scraped image details to output/image_results directory"""
