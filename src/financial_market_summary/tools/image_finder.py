@@ -366,14 +366,35 @@ Answer ONLY "SKIP" or "KEEP"."""
                                                 parts.push('CAPTION: ' + figcaption.textContent.trim());
                                             }
 
-                                            // 3. Find multiple <p> tags after the image (up to 3)
+                                            // 3. Find multiple <p> tags and <ul> elements after the image (up to 3 paragraphs)
                                             let current = element;
                                             let pCount = 0;
                                             const maxP = 3;
+                                            let foundLi = false;
 
                                             while (current && pCount < maxP) {
                                                 let nextSibling = current.nextElementSibling;
                                                 if (nextSibling) {
+                                                    // Check if next sibling is a <ul> element
+                                                    if (nextSibling.tagName.toLowerCase() === 'ul' && !foundLi) {
+                                                        const listItems = nextSibling.querySelectorAll('li');
+                                                        if (listItems.length > 0) {
+                                                            const liTexts = [];
+                                                            listItems.forEach((li, idx) => {
+                                                                if (idx < 5) {
+                                                                    const liText = li.textContent.trim();
+                                                                    if (liText.length > 10) {
+                                                                        liTexts.push('• ' + liText);
+                                                                    }
+                                                                }
+                                                            });
+                                                            if (liTexts.length > 0) {
+                                                                parts.push('KEY POINTS:\\n' + liTexts.join('\\n'));
+                                                                foundLi = true;
+                                                            }
+                                                        }
+                                                    }
+
                                                     if (nextSibling.tagName.toLowerCase() === 'p') {
                                                         const pText = nextSibling.textContent.trim();
                                                         if (pText.length > 20) {
@@ -392,6 +413,31 @@ Answer ONLY "SKIP" or "KEEP"."""
                                                             }
                                                         }
                                                     });
+
+                                                    // Check if next sibling contains <ul> elements
+                                                    if (!foundLi) {
+                                                        const nestedUl = nextSibling.querySelectorAll('ul');
+                                                        nestedUl.forEach(ul => {
+                                                            if (!foundLi) {
+                                                                const listItems = ul.querySelectorAll('li');
+                                                                if (listItems.length > 0) {
+                                                                    const liTexts = [];
+                                                                    listItems.forEach((li, idx) => {
+                                                                        if (idx < 5) {
+                                                                            const liText = li.textContent.trim();
+                                                                            if (liText.length > 10) {
+                                                                                liTexts.push('• ' + liText);
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                    if (liTexts.length > 0) {
+                                                                        parts.push('KEY POINTS:\\n' + liTexts.join('\\n'));
+                                                                        foundLi = true;
+                                                                    }
+                                                                }
+                                                            }
+                                                        });
+                                                    }
                                                 }
                                                 current = current.parentElement;
                                                 if (!current || current.tagName.toLowerCase() === 'body') break;
