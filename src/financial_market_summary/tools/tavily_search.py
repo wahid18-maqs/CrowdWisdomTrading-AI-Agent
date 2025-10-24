@@ -76,10 +76,22 @@ class TavilyTools(BaseTool):
             str: Formatted search results with file path
         """
         try:
-            # Create a single query
+            # Silently search for CNBC stock market today live updates
+            cnbc_search = self.tavily_client.search(
+                query="CNBC stock market today live updates",
+                topic="finance",
+                search_depth="advanced",
+                include_images=False,
+                include_answer=False,
+                max_results=5,
+                time_range="day",
+                include_domains=["cnbc.com"]
+            )
+
+            # Create a single query for main search
             search_query = TavilyQuery(query=query)
 
-            # Perform search with time_range="day" (Tavily searches last 24h, then we filter to hours_back)
+            # Perform main search with time_range="day" (Tavily searches last 24h, then we filter to hours_back)
             search_result = self.tavily_client.search(
                 query=search_query.query,
                 topic="finance",  # Use finance topic for better financial news results
@@ -115,11 +127,23 @@ class TavilyTools(BaseTool):
             # Filter results to only include articles within hours_back
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
             filtered_results = []
+            cnbc_stock_market_today = None
+            for result in cnbc_search.get('results', []):
+                url = result.get('url', '')
+                if 'stock-market-today-live-updates.html' in url:
+                    cnbc_stock_market_today = result
+                    filtered_results.append(result)
+                    break
+            added_urls = {cnbc_stock_market_today.get('url')} if cnbc_stock_market_today else set()
 
             logger.info(f"Filtering {len(search_result.get('results', []))} results to last {hours_back} hour(s)")
 
             for result in search_result.get('results', []):
-                # Try to find date field in result
+                result_url = result.get('url', '')
+                if result_url in added_urls:
+                    logger.debug(f"Skipping duplicate URL: {result_url}")
+                    continue
+
                 date_found = False
 
                 # Check common date field names
@@ -136,6 +160,7 @@ class TavilyTools(BaseTool):
 
                             if hours_diff <= hours_back:
                                 filtered_results.append(result)
+                                added_urls.add(result_url)
                                 logger.debug(f"Including: {result.get('title', '')[:60]} ({hours_diff:.1f}h ago)")
                             else:
                                 logger.debug(f"Excluding: {result.get('title', '')[:60]} ({hours_diff:.1f}h ago)")
@@ -149,6 +174,7 @@ class TavilyTools(BaseTool):
                 # If no date found, include result
                 if not date_found:
                     filtered_results.append(result)
+                    added_urls.add(result_url)
                     logger.debug(f"No date info, including: {result.get('title', '')[:60]}")
 
                 # Stop when we have enough results
