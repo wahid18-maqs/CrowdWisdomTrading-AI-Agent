@@ -37,41 +37,28 @@ class EnhancedImageFinder(BaseTool):
 
     def _run(self, search_content: str, max_images: int = 1, search_results_file: str = "") -> str:
         try:
-            logger.info("="*60)
-            logger.info(" IMAGE FINDER STARTED")
-            logger.info("="*60)
-
-            logger.info(f" Max images to find: {max_images}")
-            logger.info(f" Search results file: {search_results_file}")
+            logger.info("🔍 IMAGE FINDER STARTED")
 
             # Always extract URLs from search results file
             if not search_results_file:
-                logger.error(" No search results file provided")
+                logger.error("❌ No search results file provided")
                 return json.dumps([], indent=2)
 
             article_urls = self._extract_urls_from_search_results(search_results_file)
-            logger.info(f" Extracted {len(article_urls)} URLs from search results")
 
             if not article_urls:
-                logger.warning(" No article URLs found in search results")
+                logger.warning("⚠️  No URLs found")
                 return json.dumps([], indent=2)
 
-            # Extract screenshots from article URLs
-            logger.info(f" Starting screenshot extraction from {len(article_urls)} URLs...")
+            logger.info(f"📄 Processing {len(article_urls)} URL(s)")
             extracted_images = self._extract_screenshots_from_urls(article_urls, search_content, max_images)
-            logger.info(f" Screenshot extraction complete: {len(extracted_images)} images captured")
 
             if not extracted_images:
-                logger.warning(" No screenshots were captured from any URLs")
+                logger.warning("⚠️  No images captured")
                 return json.dumps([], indent=2)
 
-            # Check descriptions from <p> tags (already extracted during capture)
-            logger.info(f" Verifying descriptions for {len(extracted_images)} images...")
+            # Verify descriptions
             extracted_images = self._generate_ai_descriptions(extracted_images, search_content)
-            logger.info(f" Description check complete")
-
-            # Save and return
-            logger.info(f" Saving {len(extracted_images)} image results...")
             self._save_image_results(extracted_images, search_content)
 
             logger.info("="*60)
@@ -230,47 +217,35 @@ Answer ONLY "SKIP" or "KEEP"."""
         """Extract images from provided article URLs - tries <img> tags first, screenshots as fallback"""
         extracted_images = []
 
-        logger.info(f" Starting image extraction:")
-        logger.info(f"   - Total URLs available: {len(article_urls)}")
-        logger.info(f"   - Target images: {max_images}")
-        logger.info(f"   - Strategy: <img> tags first, screenshots as fallback")
-
         for idx, url in enumerate(article_urls, 1):
             if len(extracted_images) >= max_images:
-                logger.info(f" Target images ({max_images}) reached, stopping")
                 break
 
             try:
-                logger.info(f" [{idx}/{len(article_urls)}] Processing URL: {url[:80]}...")
+                logger.info(f"📸 [{idx}/{len(article_urls)}] {url[:60]}...")
 
-                # STEP 1: Try to extract image from <img> tags first
-                logger.info(f"   Step 1: Attempting to extract <img> tag from URL...")
+                # Try <img> tag first
                 img_tag_data = self._extract_image_from_img_tag(url)
 
                 if img_tag_data:
                     extracted_images.append(img_tag_data)
-                    logger.info(f" Image extracted from <img> tag successfully!")
-                    logger.info(f"   Image URL: {img_tag_data.get('url', 'unknown')[:80]}...")
+                    logger.info(f"✅ Image captured from <img> tag")
                     continue
 
-                # STEP 2: Fallback to screenshot capture if no <img> tag found
-                logger.info(f"   Step 2: No suitable <img> tag found, falling back to screenshot...")
+                # Fallback to chart screenshot
                 screenshot_data = self._capture_chart_screenshot(url)
 
                 if screenshot_data:
                     extracted_images.append(screenshot_data)
-                    logger.info(f" Screenshot captured successfully!")
-                    logger.info(f"   Saved to: {screenshot_data.get('url', 'unknown')}")
+                    logger.info(f"✅ Chart screenshot captured")
                 else:
-                    logger.warning(f" Both <img> tag and screenshot extraction failed for {url[:80]}...")
+                    logger.warning(f"⚠️  Failed to extract image")
 
             except Exception as e:
-                logger.error(f" Exception during image extraction from {url[:80]}...: {e}", exc_info=True)
+                logger.error(f"❌ Error: {e}")
                 continue
 
-        logger.info(f" Image extraction summary:")
-        logger.info(f"   - URLs processed: {idx}")
-        logger.info(f"   - Images extracted: {len(extracted_images)}")
+        logger.info(f"✅ Extracted {len(extracted_images)} image(s)")
 
         return extracted_images
 
@@ -298,228 +273,212 @@ Answer ONLY "SKIP" or "KEEP"."""
                 page = context.new_page()
                 page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-                # Load page with more aggressive timeout and fallback strategies
-                logger.info(f" Loading page: {article_url}")
+                # Load page
                 try:
-                    # Try with domcontentloaded first (faster)
                     page.goto(article_url, wait_until='domcontentloaded', timeout=20000)
-                    logger.info(" Page loaded (domcontentloaded)")
                     page.wait_for_timeout(3000)
                 except Exception as e:
-                    logger.warning(f" domcontentloaded failed, trying load strategy: {e}")
                     try:
-                        # Fallback to basic load
                         page.goto(article_url, wait_until='load', timeout=25000)
-                        logger.info(" Page loaded (load)")
                         page.wait_for_timeout(2000)
                     except Exception as e2:
-                        logger.error(f" Both load strategies failed: {e2}")
+                        logger.error(f"❌ Page load failed: {e2}")
                         context.close()
                         browser.close()
                         return None
 
-                # Scroll to load dynamic content and wait for charts to render
+                # Hide popups
                 try:
-                    # Scroll multiple times to trigger lazy loading
-                    logger.info(f" Scrolling page to trigger chart loading...")
-                    page.evaluate("window.scrollTo(0, 800)")
-                    page.wait_for_timeout(5000)  # Increased to 5s
-                    page.evaluate("window.scrollTo(0, 1600)")
-                    page.wait_for_timeout(5000)  # Increased to 5s
-                    page.evaluate("window.scrollTo(0, 2400)")
-                    page.wait_for_timeout(5000)  # Increased to 5s
-                    logger.info(f" Scrolled page to load dynamic content")
-                except Exception as e:
-                    logger.warning(f" Scroll failed: {e}")
-
-                # Hide all overlays, modals, and popups with CSS injection
-                try:
-                    logger.info(f" Injecting CSS to hide popups and overlays...")
                     page.add_style_tag(content="""
-                        /* Hide dialogs and modals - EXCLUDE chart-related elements */
-                        [role="dialog"]:not([class*="chart"]):not([id*="chart"]),
-                        [class*="dialog"]:not([class*="chart"]):not([id*="chart"]),
-                        [class*="Dialog"]:not([class*="chart"]):not([id*="chart"]),
-                        [id*="dialog"]:not([class*="chart"]),
-
-                        /* Hide modal backdrops and overlays that are children of body */
-                        body > [class*="backdrop"],
-                        body > [class*="Backdrop"],
-                        body > [class*="overlay"]:not([class*="chart"]):not([id*="chart"]),
-                        body > [class*="Overlay"]:not([class*="chart"]):not([id*="chart"]),
-
-                        /* Hide specific high z-index overlays */
-                        div[style*="z-index: 9999"],
-                        div[style*="z-index: 999999"],
-                        div[style*="z-index: 10000"],
-
-                        /* Hide lightboxes */
-                        [class*="lightbox"],
-                        [class*="Lightbox"] {
+                        [role="dialog"], [class*="dialog"], [class*="modal"],
+                        body > [class*="backdrop"], body > [class*="overlay"],
+                        div[style*="z-index: 9999"], [class*="lightbox"] {
                             display: none !important;
-                            visibility: hidden !important;
-                            opacity: 0 !important;
-                            pointer-events: none !important;
                         }
-
-                        /* Ensure body is scrollable (some modals disable scroll) */
-                        body {
-                            overflow: visible !important;
-                        }
+                        body { overflow: visible !important; }
                     """)
-                    logger.info(f" CSS injection complete - popups should be hidden")
-                except Exception as e:
-                    logger.warning(f" CSS injection failed (non-critical): {e}")
+                except:
+                    pass
 
-                # Wait significantly longer for charts to fully render (live market data)
-                logger.info(f"⏳ Waiting 15 seconds for live market charts to fully render...")
-                page.wait_for_timeout(15000)  # Increased from 8s to 15s for live data
-                logger.info(f" Chart rendering wait complete")
+                # Scroll to load lazy images
+                page_height = page.evaluate("document.body.scrollHeight")
+                for scroll_position in range(0, int(page_height) + 800, 800):
+                    page.evaluate(f"window.scrollTo(0, {scroll_position})")
+                    page.wait_for_timeout(200)
 
-                # Scroll back to top to ensure top images are visible
-                logger.info(f" Scrolling back to top to load header images...")
+                page.wait_for_timeout(2000)
                 page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(3000)  # Wait for top images to load
-                logger.info(f" Scrolled to top, images should be visible now")
+                page.wait_for_timeout(3000)
 
                 screenshot_data = None
 
-                # FIRST: Try to find and screenshot <img> tags (prioritize actual images)
-                logger.info(f" STEP 1: Looking for <img> tags (not charts)...")
+                # Try <img> tags (skip first, capture second)
                 try:
                     img_elements = page.query_selector_all('img')
-                    logger.info(f"   Found {len(img_elements)} <img> elements total")
-
-                    # Filter out chart images - look for actual content images
-                    # Check src or parent attributes to identify chart vs content images
                     large_images_found = 0
-                    for idx, img_elem in enumerate(img_elements):
-                        box = img_elem.bounding_box()
-                        if not box or box['width'] < 400 or box['height'] < 250:
-                            continue
 
-                        large_images_found += 1
-
-                        # Check if this is a chart image (skip it if so)
+                    for img_elem in img_elements:
                         try:
-                            img_src = img_elem.get_attribute('src') or ''
-                            img_class = img_elem.get_attribute('class') or ''
-                            img_alt = img_elem.get_attribute('alt') or ''
+                            box = img_elem.bounding_box()
 
-                            # Skip if it looks like a chart/graph image
-                            is_chart = any(keyword in (img_src + img_class + img_alt).lower()
-                                        for keyword in ['chart', 'graph', 'tradingview', 'finviz', 'stockcharts'])
+                            if box and box['width'] >= 400 and box['height'] >= 250:
+                                large_images_found += 1
 
-                            if is_chart:
-                                logger.info(f"   Skipping chart image #{large_images_found} (detected chart keywords)")
-                                continue
-                        except:
-                            pass
+                                # Skip first large image
+                                if large_images_found == 1:
+                                    continue
 
-                        # Skip first large non-chart image (usually header/logo)
-                        if large_images_found == 1:
-                            logger.info(f"   Skipping first large image #{large_images_found} (usually header)")
-                            continue
+                                # Capture second large image
+                                logger.info(f"✅ Capturing image #{large_images_found} ({int(box['width'])}x{int(box['height'])})")
 
-                        # Take second large non-chart image
-                        logger.info(f"   Found second large image ({box['width']}x{box['height']}), capturing...")
-                        try:
-                            # Try to screenshot parent container to capture captions/logos
-                            screenshot_elem = img_elem
+                                # Try to screenshot parent container
+                                screenshot_elem = img_elem
 
-                            # Check if parent is figure, picture, or container div
-                            parent = img_elem.evaluate('el => el.parentElement')
-                            if parent:
-                                parent_elem = img_elem.evaluate_handle('el => el.parentElement')
-                                parent_tag = parent_elem.evaluate('el => el.tagName.toLowerCase()')
+                                # Check if parent is figure, picture, or container div
+                                parent = img_elem.evaluate('el => el.parentElement')
+                                if parent:
+                                    parent_elem = img_elem.evaluate_handle('el => el.parentElement')
+                                    parent_tag = parent_elem.evaluate('el => el.tagName.toLowerCase()')
 
-                                # Use parent if it's a semantic container
-                                if parent_tag in ['figure', 'picture', 'article']:
-                                    screenshot_elem = parent_elem
-                                    logger.info(f"   Capturing parent <{parent_tag}> container (includes captions/logos)")
-                                else:
-                                    logger.info(f"   Capturing <img> element directly")
+                                    if parent_tag in ['figure', 'picture', 'article']:
+                                        screenshot_elem = parent_elem
 
-                            screenshot_elem.scroll_into_view_if_needed(timeout=5000)
-                            page.wait_for_timeout(2000)
-                            screenshot_bytes = screenshot_elem.screenshot(timeout=10000)
+                                screenshot_elem.scroll_into_view_if_needed(timeout=5000)
+                                page.wait_for_timeout(500)
+                                screenshot_bytes = screenshot_elem.screenshot(timeout=10000)
 
-                            # Extract <p> tag below the <img> as fallback description
-                            fallback_description = ''
-                            try:
-                                # Try to find <p> tag that comes after the <img> element
-                                next_p = img_elem.evaluate('''(element) => {
-                                    // Get the parent of the img
-                                    let parent = element.parentElement;
+                                # Extract rich description from multiple sources
+                                fallback_description = ''
+                                try:
+                                    # Extract multiple <p> and <li> tags for rich context
+                                    description_parts = img_elem.evaluate('''(element) => {
+                                            let parts = [];
 
-                                    // Look for <p> in siblings or parent's siblings
-                                    let current = element;
-                                    while (current) {
-                                        let nextSibling = current.nextElementSibling;
-                                        if (nextSibling) {
-                                            if (nextSibling.tagName.toLowerCase() === 'p') {
-                                                return nextSibling.textContent.trim();
+                                            // 1. Get image alt text
+                                            const alt = element.getAttribute('alt');
+                                            if (alt && alt.length > 10) {
+                                                parts.push('IMAGE: ' + alt.trim());
                                             }
-                                            // Check if next sibling contains a <p>
-                                            let p = nextSibling.querySelector('p');
-                                            if (p) {
-                                                return p.textContent.trim();
+
+                                            // 2. Get figcaption if image is in a figure
+                                            let figcaption = element.closest('figure')?.querySelector('figcaption');
+                                            if (figcaption) {
+                                                parts.push('CAPTION: ' + figcaption.textContent.trim());
                                             }
-                                        }
-                                        current = current.parentElement;
-                                        if (!current || current.tagName.toLowerCase() === 'body') break;
-                                    }
-                                    return '';
-                                }''')
 
-                                if next_p and len(next_p) > 20:
-                                    fallback_description = next_p
-                                    logger.info(f"   Extracted <p> tag below image: {fallback_description[:100]}...")
-                                else:
-                                    logger.info(f"   No suitable <p> tag found below image")
+                                            // 3. Find multiple <p> tags after the image (up to 3)
+                                            let current = element;
+                                            let pCount = 0;
+                                            const maxP = 3;
 
-                            except Exception as p_error:
-                                logger.warning(f"   Failed to extract <p> tag: {p_error}")
+                                            while (current && pCount < maxP) {
+                                                let nextSibling = current.nextElementSibling;
+                                                if (nextSibling) {
+                                                    if (nextSibling.tagName.toLowerCase() === 'p') {
+                                                        const pText = nextSibling.textContent.trim();
+                                                        if (pText.length > 20) {
+                                                            parts.push(pText);
+                                                            pCount++;
+                                                        }
+                                                    }
+                                                    // Check if next sibling contains <p> tags
+                                                    const nestedP = nextSibling.querySelectorAll('p');
+                                                    nestedP.forEach(p => {
+                                                        if (pCount < maxP) {
+                                                            const pText = p.textContent.trim();
+                                                            if (pText.length > 20) {
+                                                                parts.push(pText);
+                                                                pCount++;
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                                current = current.parentElement;
+                                                if (!current || current.tagName.toLowerCase() === 'body') break;
+                                            }
 
-                            # Save it
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
-                            filename = f"img_{domain}_{timestamp}.png"
+                                            // 4. Find <li> items near the image (up to 5)
+                                            let parent = element.parentElement;
+                                            let searchDistance = 0;
+                                            while (parent && searchDistance < 3) {
+                                                const listItems = parent.querySelectorAll('li');
+                                                if (listItems.length > 0) {
+                                                    const liTexts = [];
+                                                    listItems.forEach((li, idx) => {
+                                                        if (idx < 5) {
+                                                            const liText = li.textContent.trim();
+                                                            if (liText.length > 10) {
+                                                                liTexts.push('• ' + liText);
+                                                            }
+                                                        }
+                                                    });
+                                                    if (liTexts.length > 0) {
+                                                        parts.push('KEY POINTS:\\n' + liTexts.join('\\n'));
+                                                        break;
+                                                    }
+                                                }
+                                                parent = parent.parentElement;
+                                                searchDistance++;
+                                            }
 
-                            project_root = Path(__file__).resolve().parent.parent.parent.parent
-                            screenshots_dir = project_root / "output" / "screenshots"
-                            screenshots_dir.mkdir(parents=True, exist_ok=True)
-                            filepath = screenshots_dir / filename
+                                            return parts.join('\\n\\n');
+                                    }''')
 
-                            with open(filepath, 'wb') as f:
-                                f.write(screenshot_bytes)
+                                    if description_parts and len(description_parts) > 20:
+                                        fallback_description = description_parts
+                                        sources = []
+                                        if 'IMAGE:' in description_parts:
+                                            sources.append('alt')
+                                        if 'CAPTION:' in description_parts:
+                                            sources.append('figcaption')
+                                        if 'KEY POINTS:' in description_parts:
+                                            sources.append('li')
+                                        p_count = description_parts.count('\n\n') - len(sources) + 1
+                                        if p_count > 0:
+                                            sources.append(f'{p_count}p')
 
-                            logger.info(f" ✅ Image captured successfully from <img> tag!")
+                                        logger.info(f"📝 Description from: {', '.join(sources)}")
 
-                            screenshot_data = {
-                                'url': str(filepath).replace('\\', '/'),
-                                'title': self._extract_h1_from_url(article_url),
-                                'source': urlparse(article_url).netloc,
-                                'type': 'img_tag_screenshot',
-                                'telegram_compatible': True,
-                                'file_type': 'png',
-                                'trusted_source': True,
-                                'extraction_method': 'img_tag_screenshot',
-                                'source_article': article_url,
-                                'image_description': fallback_description,
-                                'content_type': 'image/png',
-                                'file_size': str(len(screenshot_bytes)),
-                            }
+                                except Exception as p_error:
+                                    logger.warning(f"⚠️  Description extraction failed: {p_error}")
 
-                            context.close()
-                            browser.close()
-                            return screenshot_data
+                                # Save it
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
+                                filename = f"img_{domain}_{timestamp}.png"
+
+                                project_root = Path(__file__).resolve().parent.parent.parent.parent
+                                screenshots_dir = project_root / "output" / "screenshots"
+                                screenshots_dir.mkdir(parents=True, exist_ok=True)
+                                filepath = screenshots_dir / filename
+
+                                with open(filepath, 'wb') as f:
+                                    f.write(screenshot_bytes)
+
+                                screenshot_data = {
+                                    'url': str(filepath).replace('\\', '/'),
+                                    'title': self._extract_h1_from_url(article_url),
+                                    'source': urlparse(article_url).netloc,
+                                    'type': 'img_tag_screenshot',
+                                    'telegram_compatible': True,
+                                    'file_type': 'png',
+                                    'trusted_source': True,
+                                    'extraction_method': 'img_tag_screenshot',
+                                    'source_article': article_url,
+                                    'image_description': fallback_description,
+                                    'content_type': 'image/png',
+                                    'file_size': str(len(screenshot_bytes)),
+                                }
+
+                                context.close()
+                                browser.close()
+                                return screenshot_data
 
                         except Exception as img_error:
-                            logger.warning(f"   Failed to capture <img>: {img_error}")
+                            logger.warning(f"⚠️  Image capture failed: {img_error}")
                             continue
 
-                    logger.info(f" No suitable <img> tags found, falling back to chart selectors...")
+                    logger.warning("⚠️  No <img> tags found, trying chart selectors...")
 
                 except Exception as e:
                     logger.warning(f" <img> tag search failed: {e}, trying chart selectors...")
