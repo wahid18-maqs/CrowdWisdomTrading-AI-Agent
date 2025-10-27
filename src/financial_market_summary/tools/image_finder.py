@@ -35,6 +35,29 @@ class EnhancedImageFinder(BaseTool):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+    def _cleanup_old_screenshots(self, screenshots_dir: Path) -> None:
+        """Clean up screenshot files older than 10 days."""
+        try:
+            import glob
+            from datetime import timezone
+
+            screenshot_files = glob.glob(str(screenshots_dir / "*.png"))
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=10)
+            deleted_count = 0
+
+            for file_path in screenshot_files:
+                file_time = os.path.getmtime(file_path)
+                file_date = datetime.fromtimestamp(file_time, tz=timezone.utc)
+
+                if file_date < cutoff_date:
+                    os.remove(file_path)
+                    deleted_count += 1
+
+            if deleted_count > 0:
+                logger.debug(f"Cleaned up {deleted_count} screenshot(s) older than 10 days")
+        except Exception as cleanup_error:
+            logger.debug(f"Screenshot cleanup warning: {cleanup_error}")
+
     def _run(self, search_content: str, max_images: int = 1, search_results_file: str = "") -> str:
         try:
             logger.info("🔍 IMAGE FINDER STARTED")
@@ -116,13 +139,11 @@ class EnhancedImageFinder(BaseTool):
             for article in articles:
                 url = article.get('url')
                 if url and url.startswith('http'):
-                    # Prioritize CNBC URLs silently
                     if 'cnbc.com' in url.lower():
                         cnbc_urls.append(url)
                     else:
                         other_urls.append(url)
 
-            # CNBC URLs first, then others
             urls = cnbc_urls + other_urls
 
             logger.info(f" Extracted {len(urls)} URLs from search results file")
@@ -155,10 +176,10 @@ class EnhancedImageFinder(BaseTool):
                 }
             )
 
-            # Load image
+            
             pil_image = Image.open(io.BytesIO(image_bytes))
 
-            # AI prompt
+            
             prompt = f"""Look at this image from a financial news article.
 
 Alt text: "{img_alt}"
@@ -209,8 +230,6 @@ Answer ONLY "SKIP" or "KEEP"."""
 
     def _extract_image_from_img_tag(self, article_url: str) -> Optional[Dict[str, Any]]:
         """Use existing chart screenshot method but look for <img> tags instead"""
-        # This method now just returns None to use chart fallback
-        # We'll modify the chart screenshot method to look for <img> first
         return None
 
     def _extract_screenshots_from_urls(self, article_urls: List[str], content: str, max_images: int) -> List[Dict[str, Any]]:
@@ -489,13 +508,16 @@ Answer ONLY "SKIP" or "KEEP"."""
                                     logger.warning(f"⚠️  Description extraction failed: {p_error}")
 
                                 # Save it
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
-                                filename = f"img_{domain}_{timestamp}.png"
+                                date_str = datetime.now().strftime("%Y%m%d")
+                                filename = f"img_{date_str}.png"
 
                                 project_root = Path(__file__).resolve().parent.parent.parent.parent
                                 screenshots_dir = project_root / "output" / "screenshots"
                                 screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+                                # Clean up old screenshots (keep only last 10 days)
+                                self._cleanup_old_screenshots(screenshots_dir)
+
                                 filepath = screenshots_dir / filename
 
                                 with open(filepath, 'wb') as f:
@@ -535,7 +557,7 @@ Answer ONLY "SKIP" or "KEEP"."""
                 # Find chart elements - prioritize containers that include labels/legends
                 chart_selectors = [
                     # Yahoo Finance specific
-                    'section[data-testid*="chart"]',  # Yahoo Finance chart section
+                    'section[data-testid*="chart"]', 
                     'div[data-testid*="chart"]',
                     'div[id*="chart-"]',
                     'section[class*="chart"]',
@@ -611,13 +633,16 @@ Answer ONLY "SKIP" or "KEEP"."""
                                 continue  # Try next element
 
                             # Save screenshot
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            domain = re.sub(r'[^\w\s-]', '', urlparse(article_url).netloc)
-                            filename = f"chart_{domain}_{timestamp}.png"
+                            date_str = datetime.now().strftime("%Y%m%d")
+                            filename = f"chart_{date_str}.png"
 
                             project_root = Path(__file__).resolve().parent.parent.parent.parent
                             screenshots_dir = project_root / "output" / "screenshots"
                             screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+                            # Clean up old screenshots (keep only last 10 days)
+                            self._cleanup_old_screenshots(screenshots_dir)
+
                             filepath = screenshots_dir / filename
 
                             with open(filepath, 'wb') as f:
@@ -957,12 +982,30 @@ Your response (exact text):"""
             image_results_dir = project_root / "output" / "image_results"
             image_results_dir.mkdir(parents=True, exist_ok=True)
 
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_content = re.sub(r'[^\w\s-]', '', search_content[:50]).strip()
-            safe_content = re.sub(r'[-\s]+', '-', safe_content)
+            # Clean up old image result files (keep only last 10 days)
+            try:
+                import glob
 
-            filename = f"image_results_{timestamp}_{safe_content}.json"
+                image_files = glob.glob(str(image_results_dir / "image-result_*.json"))
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=10)
+                deleted_count = 0
+
+                for file_path in image_files:
+                    file_time = os.path.getmtime(file_path)
+                    file_date = datetime.fromtimestamp(file_time, tz=timezone.utc)
+
+                    if file_date < cutoff_date:
+                        os.remove(file_path)
+                        deleted_count += 1
+
+                if deleted_count > 0:
+                    logger.debug(f"Cleaned up {deleted_count} image result file(s) older than 10 days")
+            except Exception as cleanup_error:
+                logger.debug(f"Image results cleanup warning: {cleanup_error}")
+
+            # Generate filename with date only
+            date_str = datetime.now().strftime("%Y%m%d")
+            filename = f"image-result_{date_str}.json"
             filepath = image_results_dir / filename
 
             # Prepare detailed image results data

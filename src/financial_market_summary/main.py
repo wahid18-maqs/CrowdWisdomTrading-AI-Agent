@@ -237,14 +237,36 @@ if __name__ == "__main__":
         logger.info("Please check your API keys and the connection status logs above.")
         final_result = {"status": "failed", "error": "Insufficient API connections"}
     
-    # Saving the final result to a JSON file in the output folder
+    # Saving the final result to a JSON file in the logs folder
     try:
-        output_dir = ROOT_DIR / "output"
+        output_dir = ROOT_DIR / "logs"
         output_dir.mkdir(exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        result_file = output_dir / f"workflow_result_{timestamp}.json"
-        
+
+        # Clean up old workflow-result files (keep only last 10 days)
+        try:
+            import glob
+            from datetime import timedelta
+
+            workflow_files = glob.glob(str(output_dir / "workflow-result_*.json"))
+            cutoff_date = datetime.now() - timedelta(days=10)
+            deleted_count = 0
+
+            for file_path in workflow_files:
+                file_time = os.path.getmtime(file_path)
+                file_date = datetime.fromtimestamp(file_time)
+
+                if file_date < cutoff_date:
+                    os.remove(file_path)
+                    deleted_count += 1
+
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} workflow-result file(s) older than 10 days")
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to clean up old workflow files: {cleanup_error}")
+
+        date_str = datetime.now().strftime("%Y%m%d")
+        result_file = output_dir / f"workflow-result_{date_str}.json"
+
         import json
         with open(result_file, 'w', encoding='utf-8') as f:
             json.dump({
@@ -252,8 +274,8 @@ if __name__ == "__main__":
                 'workflow_result': final_result,
                 'timestamp': datetime.now().isoformat()
             }, f, indent=2, ensure_ascii=False, default=str)
-        
+
         logger.info(f"Final results saved to: {result_file}")
-        
+
     except Exception as e:
         logger.warning(f"Failed to save results to a file due to an error: {e}")

@@ -181,7 +181,8 @@ The system automatically detects your API tier and adjusts behavior accordingly.
    - Sends to language-specific bots
 
 7. **Completion**
-   - Saves workflow results to `output/workflow_result_*.json`
+   - Saves workflow results to `logs/workflow-result_YYYYMMDD.json`
+   - Automatically cleans up files older than 10 days
    - Logs execution time and status
 
 ## Output

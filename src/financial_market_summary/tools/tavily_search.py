@@ -222,9 +222,29 @@ class TavilyTools(BaseTool):
         output_dir = Path("output/search_results")
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        safe_query = re.sub(r'[^\w\s-]', '', query).replace(' ', '-')[:50]
-        filepath = output_dir / f"search_results_{timestamp}_{safe_query}.json"
+        # Clean up old search result files (keep only last 10 days)
+        try:
+            import glob
+
+            search_files = glob.glob(str(output_dir / "search-result_*.json"))
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=10)
+            deleted_count = 0
+
+            for file_path in search_files:
+                file_time = os.path.getmtime(file_path)
+                file_date = datetime.fromtimestamp(file_time, tz=timezone.utc)
+
+                if file_date < cutoff_date:
+                    os.remove(file_path)
+                    deleted_count += 1
+
+            if deleted_count > 0:
+                logger.debug(f"Cleaned up {deleted_count} search result file(s) older than 10 days")
+        except Exception as cleanup_error:
+            logger.debug(f"Search results cleanup warning: {cleanup_error}")
+
+        date_str = datetime.utcnow().strftime("%Y%m%d")
+        filepath = output_dir / f"search-result_{date_str}.json"
 
         now = datetime.utcnow()
         output_data = {
@@ -233,7 +253,7 @@ class TavilyTools(BaseTool):
             "time_range_hours": hours_back,
             "total_results": len(search_result.get('results', [])),
             "answer": search_result.get('answer', ''),
-            "articles": search_result.get('results', [])  # Store as 'articles' for image_finder
+            "articles": search_result.get('results', [])  
         }
 
         with open(filepath, 'w', encoding='utf-8') as f:
